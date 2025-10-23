@@ -1,0 +1,63 @@
+# 忽略 OS 生成的文件
+.DS_Store
+Thumbs.db
+*.tmp
+
+# 忽略编译产物
+/*.class
+/*.jar
+/*.war
+/*.war/
+
+# 忽略 node_modules
+node_modules/
+npm-debug.log*
+
+# 忽略 Python 虚拟环境
+__pycache__/
+venv/
+*.pyc
+*.ipynb
+.vscode/
+
+# 忽略 Docker 相关
+.dockerenv
+*.dockerfile
+
+runs/
+vis_result/
+inference_results/
+inference_and_plots/
+training_data/
+
+# 忽略图像
+*.png
+*.jpg
+*.jpeg
+*.gif
+*.svg
+*.ico
+*.webp
+*.psd
+*.ai
+*.eps
+*.svg
+*.tif
+*.tiff
+*.bmp
+*.raw
+*.heic
+*.indd
+*.pdf
+*.eps
+*.ai
+*.psd
+*.svg
+*.tif
+*.tiff
+*.bmp
+*.raw
+*.heic
+*.indd
+*.pdf
+*.eps
