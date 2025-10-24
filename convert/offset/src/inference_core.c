@@ -81,11 +81,26 @@ static inline int32_t ShiftRightRounded_S64(int64_t val, int32_t shift) {
     }
     if (shift >= 63) { return (val >= 0) ? 0 : -1; }
 
-    int64_t round = (int64_t)1 << (shift - 1);
-    int64_t result_64 = val + round;
-    result_64 >>= shift;
-
     const int64_t max_val = INT32_MAX; const int64_t min_val = INT32_MIN;
+    uint64_t abs_val = (val < 0) ? (uint64_t)(-val) : (uint64_t)val;
+    uint64_t divisor = (uint64_t)1 << shift;
+    uint64_t quotient = abs_val >> shift;
+    uint64_t remainder = abs_val & (divisor - 1);
+    uint64_t halfway = divisor >> 1;
+
+    bool round_up = false;
+    if (remainder > halfway) {
+        round_up = true;
+    } else if (remainder == halfway && (quotient & 1ULL)) {
+        round_up = true;
+    }
+
+    if (round_up) {
+        quotient += 1ULL;
+    }
+
+    int64_t result_64 = (val < 0) ? -(int64_t)quotient : (int64_t)quotient;
+
     if (result_64 > max_val) { return INT32_MAX; }
     if (result_64 < min_val) { return INT32_MIN; }
     return (int32_t)result_64;
@@ -119,7 +134,9 @@ static act_type_t requantize_s32_to_u8( acc_type_t accum, int32_t multiplier, in
 // =================================================================
 // 2. 算子实现 (Restore bodies)
 // =================================================================
-static inline int32_t get_index(int32_t h, int32_t w, int32_t c, int32_t W, int32_t C) { return h * W * C + w * C + c;}
+static inline int32_t get_index_nchw(int32_t h, int32_t w, int32_t c,int32_t H, int32_t W) {
+    return c * H * W + h * W + w;
+}
 static inline int32_t get_weight_index(int32_t oc, int32_t kh, int32_t kw, int32_t ic, int32_t K, int32_t IC_per_G) { return oc * (K * K * IC_per_G) + kh * (K * IC_per_G) + kw * (IC_per_G) + ic; }
 
 // --- Restore layer_conv2d_s8 body ---
@@ -155,7 +172,7 @@ static void layer_conv2d_s8(
                             const int32_t iw = ow * p->S + kw - p->P;
                             if (ih < 0 || ih >= p->H || iw < 0 || iw >= p->W) { continue; }
                             const int32_t ic_abs = g_idx * IC_per_G + ic_g;
-                            int32_t in_idx = get_index(ih, iw, ic_abs, p->W, p->C);
+                            int32_t in_idx = get_index_nchw(ih, iw, ic_abs, p->H, p->W);
                             int32_t w_idx = get_weight_index(oc, kh, kw, ic_g, p->K, IC_per_G);
 
                             acc_type_t in_val = (acc_type_t)in[in_idx];
@@ -184,7 +201,7 @@ static void layer_conv2d_s8(
                     out_val = (out_val < relu_limit) ? relu_limit : out_val;
                     if(trace_this_pixel) LOG_TRACE("After ReLU (limit=%u): %u", relu_limit, out_val);
                 }
-                out[get_index(oh, ow, oc, p->OW, p->OC)] = out_val;
+                out[get_index_nchw(oh, ow, oc, p->OH, p->OW)] = out_val;
             }
         }
     }
@@ -197,8 +214,9 @@ static void layer_global_avg_pool_s8(
     int32_t H, int32_t W, int32_t C,
     act_type_t in_zp,
     act_type_t out_zp,
-    int32_t out_multiplier,
-    int32_t out_shift
+    const int32_t* out_multiplier,
+    const int32_t* out_shift,
+    int is_per_channel
 ) {
     LOG_DEBUG("GAP: In(%" PRId32 ",%" PRId32 ",%" PRId32 ") InZp=%"PRIu8" OutZp=%"PRIu8, H, W, C, in_zp, out_zp);
     const int32_t pool_size = H * W;
@@ -211,10 +229,14 @@ static void layer_global_avg_pool_s8(
         acc_type_t acc = 0;
         for (int32_t h = 0; h < H; ++h) {
             for (int32_t w = 0; w < W; ++w) {
-                acc = saturate_add_s32(acc, (acc_type_t)in[get_index(h, w, c, W, C)] - (acc_type_t)in_zp);
+                acc = saturate_add_s32(acc,
+                                       (acc_type_t)in[get_index_nchw(h, w, c, H, W)]
+                                       - (acc_type_t)in_zp);
             }
         }
-        act_type_t out_val = requantize_s32_to_u8(acc, out_multiplier, out_shift, out_zp);
+        int32_t current_multiplier = is_per_channel ? out_multiplier[c] : *out_multiplier;
+        int32_t current_shift = is_per_channel ? out_shift[c] : *out_shift;
+        act_type_t out_val = requantize_s32_to_u8(acc, current_multiplier, current_shift, out_zp);
         out[c] = out_val;
     }
 }
@@ -280,40 +302,46 @@ int model_forward_s8(
 ) {
     LOG_DEBUG("Model Forward (Quantized - uint8 activations, Adjusted MAC)");
 
-    act_type_t* buf0 = (act_type_t*)(arena);
-    act_type_t* buf1 = (act_type_t*)(arena + 84);
-    act_type_t* buf2 = (act_type_t*)(arena + 84 + 8);
-    #if MODEL_ARENA_SIZE < 98
-    #error "MODEL_ARENA_SIZE ..."
+    act_type_t* buf_conv0 = (act_type_t*)(arena);               // 84 bytes (4*3*7)
+    act_type_t* buf_conv1 = (act_type_t*)(arena + 84);           // 84 bytes (4*3*7)
+    act_type_t* buf_gap   = (act_type_t*)(arena + 84 + 84);      // 4 bytes
+    act_type_t* buf_cat   = (act_type_t*)(arena + 84 + 84 + 4);  // 6 bytes
+
+    #if MODEL_ARENA_SIZE < (84 + 84 + 4 + 6)
+    #error "MODEL_ARENA_SIZE is too small for activation buffers"
     #endif
 
-    const size_t buf0_b1dw_size = 1*2*3*7; const size_t buf0_b1pw_size = 1*4*3*7; const size_t buf0_b2dw_size = 1*4*3*7; const size_t buf0_b2pw_size = 1*4*3*7;
-    const size_t buf1_gap_size = 4; const size_t buf1_head0_size = 8; const size_t buf2_size = 6; const size_t out_q_size = 2;
+    const size_t size_block1_dw = 1*2*3*7;
+    const size_t size_block1_pw = 1*4*3*7;
+    const size_t size_block2_dw = 1*4*3*7;
+    const size_t size_block2_pw = 1*4*3*7;
+    const size_t size_gap       = 4;
+    const size_t size_cat       = 6;
+    const size_t size_head0     = 8;
+    const size_t size_head2     = 2;
 
-    layer_conv2d_s8(buf0, x_q, g_block1_dw_weight, g_block1_dw_bias, &P_BLOCK1_DW, g_block1_dw_multiplier, g_block1_dw_shift);
-    dump_intermediate_tensor("block1_dw_q", buf0, buf0_b1dw_size);
-    layer_conv2d_s8(buf0, buf0, g_block1_pw_weight, g_block1_pw_bias, &P_BLOCK1_PW, g_block1_pw_multiplier, g_block1_pw_shift);
-    dump_intermediate_tensor("block1_pw_q", buf0, buf0_b1pw_size);
 
-    layer_conv2d_s8(buf0, buf0, g_block2_dw_weight, g_block2_dw_bias, &P_BLOCK2_DW, g_block2_dw_multiplier, g_block2_dw_shift);
-    dump_intermediate_tensor("block2_dw_q", buf0, buf0_b2dw_size);
-    layer_conv2d_s8(buf0, buf0, g_block2_pw_weight, g_block2_pw_bias, &P_BLOCK2_PW, g_block2_pw_multiplier, g_block2_pw_shift);
-    dump_intermediate_tensor("block2_pw_q", buf0, buf0_b2pw_size);
+    
+    if (MODEL_GAP_OUT_ZERO_POINT != MODEL_INPUT_META_ZERO_POINT || MODEL_CAT_OUT_ZERO_POINT != MODEL_GAP_OUT_ZERO_POINT) { LOG_WARN("Cat qparams mismatch...");}
+    layer_conv2d_s8(buf_conv0, buf_conv1, g_block2_dw_weight, g_block2_dw_bias, &P_BLOCK2_DW, g_block2_dw_multiplier, g_block2_dw_shift);
+    dump_intermediate_tensor("block2_dw_q", buf_conv0, size_block2_dw);
 
-    layer_global_avg_pool_s8(buf1, buf0, 3, 7, 4, MODEL_BLOCK2_OUT_ZERO_POINT, MODEL_GAP_OUT_ZERO_POINT, MODEL_GAP_OUT_MULTIPLIER, MODEL_GAP_OUT_SHIFT);
-    dump_intermediate_tensor("gap_requant_q", buf1, buf1_gap_size);
+    layer_conv2d_s8(buf_conv1, buf_conv0, g_block2_pw_weight, g_block2_pw_bias, &P_BLOCK2_PW, g_block2_pw_multiplier, g_block2_pw_shift);
+    dump_intermediate_tensor("block2_pw_q", buf_conv1, size_block2_pw);
+
+    layer_global_avg_pool_s8(buf_gap, buf_conv1, 3, 7, 4, MODEL_BLOCK2_OUT_ZERO_POINT, MODEL_GAP_OUT_ZERO_POINT,
+                             g_gap_out_multiplier, g_gap_out_shift, MODEL_GAP_OUT_IS_PER_CHANNEL);
+    dump_intermediate_tensor("gap_requant_q", buf_gap, size_gap);
 
     if (MODEL_GAP_OUT_ZERO_POINT != MODEL_INPUT_META_ZERO_POINT || MODEL_CAT_OUT_ZERO_POINT != MODEL_GAP_OUT_ZERO_POINT) { LOG_WARN("Cat qparams mismatch...");}
-    layer_cat_s8(buf2, buf1, 4, meta_q, 2);
-    dump_intermediate_tensor("cat_q", buf2, buf2_size);
+    layer_cat_s8(buf_cat, buf_gap, 4, meta_q, 2);
+    dump_intermediate_tensor("cat_q", buf_cat, size_cat);
 
-    layer_linear_s8(buf1, buf2, g_head_0_weight, g_head_0_bias, &P_HEAD_0, g_head_0_multiplier, g_head_0_shift);
-    dump_intermediate_tensor("head0_q", buf1, buf1_head0_size);
+    layer_linear_s8(buf_conv0, buf_cat, g_head_0_weight, g_head_0_bias, &P_HEAD_0, g_head_0_multiplier, g_head_0_shift);
+    dump_intermediate_tensor("head0_q", buf_conv0, size_head0);
 
-    layer_linear_s8(out_q, buf1, g_head_2_weight, g_head_2_bias, &P_HEAD_2, g_head_2_multiplier, g_head_2_shift);
-    dump_intermediate_tensor("head2_q", out_q, out_q_size);
-
-    LOG_DEBUG("Model Forward Done.");
+    layer_linear_s8(out_q, buf_conv0, g_head_2_weight, g_head_2_bias, &P_HEAD_2, g_head_2_multiplier, g_head_2_shift);
+    dump_intermediate_tensor("head2_q", out_q, size_head2);
     return 0; // Ensure return 0 on success
 }
 

@@ -62,8 +62,7 @@
 
 // --- Requantization Params for Layer: GAP ---
 // Note: Maps block2_out scale to the re-quantized scale before cat (_scale_0)
-#define MODEL_GAP_OUT_MULTIPLIER 1472230947
-#define MODEL_GAP_OUT_SHIFT 33
-#define MODEL_GAP_OUT_ZERO_POINT 0
+#define MODEL_GAP_OUT_IS_PER_CHANNEL 0
+#define MODEL_GAP_OUT_NUM_CHANNELS 1
 
 #endif // MODEL_META_H

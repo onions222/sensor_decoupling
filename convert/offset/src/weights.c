@@ -102,3 +102,11 @@ const int32_t g_head_2_multiplier[2] = {
 const int32_t g_head_2_shift[2] = {
   36, 51
 };
+
+const int32_t g_gap_out_multiplier[1] = {
+  1472230947
+};
+
+const int32_t g_gap_out_shift[1] = {
+  33
+};

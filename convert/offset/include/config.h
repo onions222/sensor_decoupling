@@ -6,7 +6,7 @@
 // --- Logging ---
 // 0: None, 1: Error, 2: Warn, 3: Info (Verification), 4: Debug (Layer Ops), 5: Trace (Per-element values)
 #define INFERENCE_C_LOG_LEVEL 4 // Default log level
-#define MODEL_ARENA_SIZE 128
+#define MODEL_ARENA_SIZE 192
 // --- Intermediate Debugging ---
 // Define this (e.g., via Makefile -DDUMP_INTERMEDIATES) to save C layer outputs
 // #define DUMP_INTERMEDIATES
