@@ -110,12 +110,12 @@ class TouchJSONDataset(Dataset):
             with open(path, 'r', encoding='utf-8') as f:
                 obj = json.load(f)
             # Use only sample "0"
-            k = "0"
+            k = "1"
             if k in obj:
                  rec = obj[k]
                  m = np.array(rec['merging']['normalized_matrix'], dtype=np.float32)
                  t = np.array(rec['nonmerging']['normalized_matrix'], dtype=np.float32)
-                 print(f"[INFO] Loaded sample '0' from {self.filename}")
+                 print(f"[INFO] Loaded sample {k} from {self.filename}")
                  return [{'merging': m, 'target': t, 'file': self.filename, 'id': k}]
             else:
                  print(f"[WARN] Sample '0' not found in {self.filename}")

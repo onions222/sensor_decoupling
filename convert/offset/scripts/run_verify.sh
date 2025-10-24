@@ -9,7 +9,7 @@ SRC_DIR="src"
 BUILD_DIR="build"
 VERIFY_DATA_DIR="verify_data"
 TOOLS_DIR="tools"
-DATA_DIR="data" # Directory for input JSON
+DATA_DIR="/work/hwc/SENSOR_STAGE3/convert/offset/data" # Directory for input JSON
 DATA_FILE="aligned_g26.json" # Default input file
 
 # --- 修正: 指向您新训练的、包含有效 QParams 的模型文件 ---

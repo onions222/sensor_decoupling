@@ -6,6 +6,7 @@ import os
 import re
 from pathlib import Path
 import sys # For exit
+import math
 import warnings
 warnings.filterwarnings("ignore") # Suppress warnings
 
@@ -140,7 +141,8 @@ def get_requant_params(effective_scale):
          while abs(scale_adj) < 1e-9 and adj_exponent < 60: scale_adj *= 2.0; adj_exponent += 1
          if abs(scale_adj) >= 1e-9: significand, exponent = np.frexp(scale_adj); exponent -= adj_exponent; print(f"  Adjusted: signif={significand}, exp={exponent}")
          else: print(f"[ERROR] Could not recover significand for scale {effective_scale}."); return 0, 0
-    significand_q31 = int(round(significand * (1 << 31)))
+    # significand_q31 = int(round(significand * (1 << 31))) # Original line (round half away from zero)
+    significand_q31 = int(math.floor(significand * (1 << 31) + 0.5)) # New line (round half up)
     if significand_q31 == (1 << 31): significand_q31 //= 2; exponent += 1
     elif significand_q31 <= 0 and effective_scale > 0.0: # Check if rounding yielded non-positive for positive scale
         print(f"[WARN] Effective scale {effective_scale:.6e} resulted in zero or negative multiplier ({significand_q31}) *after* np.frexp. Check ranges.")
@@ -408,17 +410,50 @@ def export_model_data(model_int8_path, float_model_def, out_dir_str):
     in_s_gap, in_z_gap = q_params.get("block2_out", (0.1, 0)) # ... (rest of GAP logic is the same) ...
     out_s_gap, out_z_gap = q_params.get("gap_out", (0.1, 0))
     pool_size = 3 * 7
-    if hasattr(in_s_gap, 'item'): in_s_gap = in_s_gap.item()
-    if hasattr(out_s_gap, 'item'): out_s_gap = out_s_gap.item()
-    if out_s_gap <= 0.0 or pool_size == 0: # Check non-positive
-        print(f"[ERROR] Invalid scale (<=0) or pool size for GAP..."); effective_scale_gap = 0.0
-    else: effective_scale_gap = in_s_gap / (out_s_gap * pool_size)
-    multiplier_gap, shift_gap = get_requant_params(effective_scale_gap)
+    def _to_numpy_scales(val, name):
+        if isinstance(val, torch.Tensor):
+            return val.detach().cpu().numpy().astype(np.float64).reshape(-1)
+        if isinstance(val, np.ndarray):
+            return val.astype(np.float64).reshape(-1)
+        try:
+            return np.array([float(val)], dtype=np.float64)
+        except Exception:
+            print(f"[WARN] Unable to convert {name} to numpy array (value={val}). Using default scale 0.1.")
+            return np.array([0.1], dtype=np.float64)
+
+    in_scales_gap = _to_numpy_scales(in_s_gap, "block2_out scale")
+    out_scales_gap = _to_numpy_scales(out_s_gap, "gap_out scale")
+
+    if out_scales_gap.size == 1 and in_scales_gap.size > 1:
+        out_scales_gap = np.full(in_scales_gap.shape, out_scales_gap.item(), dtype=np.float64)
+    elif out_scales_gap.size not in (1, in_scales_gap.size):
+        print(f"[WARN] GAP output scale size ({out_scales_gap.size}) does not match input channels ({in_scales_gap.size}). Broadcasting first value.")
+        out_scales_gap = np.full(in_scales_gap.shape, out_scales_gap.flat[0], dtype=np.float64)
+
+    effective_scale_gap = np.zeros_like(in_scales_gap, dtype=np.float64)
+    if pool_size == 0:
+        print(f"[ERROR] Invalid pool size for GAP (pool_size={pool_size}).")
+    else:
+        denom = out_scales_gap * pool_size
+        invalid = denom <= 0.0
+        if np.any(invalid):
+            print(f"[ERROR] Non-positive GAP denominator detected. Channels: {np.where(invalid)[0].tolist()}")
+        valid = ~invalid
+        effective_scale_gap[valid] = in_scales_gap[valid] / denom[valid]
+
+    multiplier_gap, shift_gap = get_requant_params(torch.from_numpy(effective_scale_gap))
+    gap_num_channels = in_scales_gap.size
+    gap_is_per_channel = 1 if gap_num_channels > 1 else 0
+
     h_meta.append(f"\n// --- Requantization Params for Layer: GAP ---")
     h_meta.append(f"// Note: Maps block2_out scale to the re-quantized scale before cat (_scale_0)")
-    h_meta.append(format_c_define(f"MODEL_GAP_OUT_MULTIPLIER", multiplier_gap))
-    h_meta.append(format_c_define(f"MODEL_GAP_OUT_SHIFT", shift_gap))
-    h_meta.append(format_c_define(f"MODEL_GAP_OUT_ZERO_POINT", q_params.get("gap_out", [0.1, 0])[1])) # GAP output ZP based on re-quant params
+    h_meta.append(f"#define MODEL_GAP_OUT_IS_PER_CHANNEL {gap_is_per_channel}")
+    h_meta.append(f"#define MODEL_GAP_OUT_NUM_CHANNELS {gap_num_channels}")
+
+    h_weights.append(f"extern const int32_t g_gap_out_multiplier[{gap_num_channels}];")
+    c_weights.append(format_c_array("g_gap_out_multiplier", multiplier_gap, 'int32_t'))
+    h_weights.append(f"extern const int32_t g_gap_out_shift[{gap_num_channels}];")
+    c_weights.append(format_c_array("g_gap_out_shift", shift_gap, 'int32_t'))
 
     # --- 7. 写入文件 ---
     h_meta.append("\n#endif // MODEL_META_H") # ... (rest of file writing is the same) ...

@@ -2,23 +2,21 @@
 #include "weights.h"      // (Auto-generated) - Contains weight_type_t arrays
 #include "model_meta.h"   // (Auto-generated) - Contains act_type_t zero points
 #include <string.h>       // for memset, strerror
-#include <math.h>         // for float helpers (roundf, tanhf, fabsf, isnan, isinf)
+// --- 确保 <math.h> 包含 nearbyint (C99) ---
+#include <math.h>         // for float helpers (floor, nearbyint, roundf, tanhf, fabsf, isnan, isinf, modff, fmodf)
 #include <limits.h>       // for INT_MAX, INT_MIN, UINT8_MAX
 #include <inttypes.h>     // For PRId32, PRIu8 format specifier
 #include <stdbool.h>      // For bool type
 
 // --- Include stdio.h only if dumping intermediates ---
 #ifdef DUMP_INTERMEDIATES
-#include <stdio.h> // For file operations
-#include <sys/stat.h> // For mkdir
-#include <errno.h>    // For errno
+#include <stdio.h>    // For file operations (FILE, fopen, etc.)
+#include <sys/stat.h> // For struct stat, stat, mkdir
+#include <errno.h>    // For errno, EEXIST
     #ifdef _WIN32
     #include <direct.h> // For _mkdir on Windows
     #endif
-#endif
 
-// --- 修正: 恢复完整的 Dump 帮助函数 ---
-#ifdef DUMP_INTERMEDIATES
 static int ensure_dir_exists(const char* path) {
     struct stat st = {0};
     if (stat(path, &st) == -1) {
@@ -49,11 +47,9 @@ static void dump_intermediate_tensor(const char* name, const act_type_t* data, s
 #define dump_intermediate_tensor(name, data, size)
 #endif
 
-
 // =================================================================
 // 1. TFLite Micro 风格的定点数学 (纯 32-bit)
 // =================================================================
-
 // 辅助函数: (a * b) 的高 32 位 (未使用, 但保留)
 static inline int32_t SaturatingRoundingDoublingHighMul_S64(int32_t a, int32_t b) {
     int64_t a_64 = a;
@@ -69,6 +65,7 @@ static inline int32_t SaturatingRoundingDoublingHighMul_S64(int32_t a, int32_t b
 }
 
 // 辅助函数: (val + round) >> shift (Round-Half-Up)
+// --- 保持 requantization 的舍入方式为 round-half-up (TFLite 常用) ---
 static inline int32_t ShiftRightRounded_S64(int64_t val, int32_t shift) {
     if (shift <= 0) {
         int32_t left_shift = -shift;
@@ -89,9 +86,8 @@ static inline int32_t ShiftRightRounded_S64(int64_t val, int32_t shift) {
     uint64_t halfway = divisor >> 1;
 
     bool round_up = false;
-    if (remainder > halfway) {
-        round_up = true;
-    } else if (remainder == halfway && (quotient & 1ULL)) {
+    // --- Round half up logic ---
+    if (remainder >= halfway) {
         round_up = true;
     }
 
@@ -107,7 +103,6 @@ static inline int32_t ShiftRightRounded_S64(int64_t val, int32_t shift) {
 }
 
 
-// --- 修正: 移除嵌套的函数，恢复 MultiplyByQuantizedMultiplier ---
 static int32_t MultiplyByQuantizedMultiplier(acc_type_t x, int32_t quantized_multiplier, int32_t shift) {
     // Calculate the 64-bit product
     int64_t product = (int64_t)x * quantized_multiplier;
@@ -130,16 +125,14 @@ static act_type_t requantize_s32_to_u8( acc_type_t accum, int32_t multiplier, in
     return final_val;
 }
 
-
 // =================================================================
-// 2. 算子实现 (Restore bodies)
+// 2. 算子实现
 // =================================================================
 static inline int32_t get_index_nchw(int32_t h, int32_t w, int32_t c,int32_t H, int32_t W) {
     return c * H * W + h * W + w;
 }
 static inline int32_t get_weight_index(int32_t oc, int32_t kh, int32_t kw, int32_t ic, int32_t K, int32_t IC_per_G) { return oc * (K * K * IC_per_G) + kh * (K * IC_per_G) + kw * (IC_per_G) + ic; }
 
-// --- Restore layer_conv2d_s8 body ---
 static void layer_conv2d_s8(
     act_type_t* out,
     const act_type_t* in,
@@ -151,7 +144,7 @@ static void layer_conv2d_s8(
 ) {
     const int32_t IC_per_G = p->C / p->G;
     const act_type_t relu_limit = p->out_zp;
-    bool is_block1_pw = (p->C == 2 && p->K == 1 && p->G == 1);
+    bool is_block1_pw = (p->C == 2 && p->K == 1 && p->G == 1); // For debug trace
 
     LOG_DEBUG("Conv2D: In(%" PRId32 ",%" PRId32 ",%" PRId32 ") Out(%" PRId32 ",%" PRId32 ",%" PRId32 ") K=%" PRId32 " S=%" PRId32 " P=%" PRId32 " G=%" PRId32 " PerChan=%d InZp=%"PRIu8" OutZp=%"PRIu8,
         p->H, p->W, p->C, p->OH, p->OW, p->OC, p->K, p->S, p->P, p->G, p->is_per_channel, p->in_zp, p->out_zp);
@@ -160,9 +153,8 @@ static void layer_conv2d_s8(
         for (int32_t ow = 0; ow < p->OW; ++ow) {
             for (int32_t oc = 0; oc < p->OC; ++oc) {
                 acc_type_t acc = 0; // Initialize acc to 0
-                bool trace_this_pixel = is_block1_pw && (oh==0 && ow==0 && oc==0);
+                bool trace_this_pixel = is_block1_pw && (oh==0 && ow==0 && oc==0); // For specific pixel trace
                 if(trace_this_pixel) LOG_TRACE("--- Tracing B1PW [0,0,%d] ---", oc);
-                // if(trace_this_pixel) LOG_TRACE("Start Acc (Bias): %" PRId32, acc); // Bias added later
 
                 const int32_t g_idx = (p->G > 1) ? (oc / (p->OC / p->G)) : 0;
                 for (int32_t kh = 0; kh < p->K; ++kh) {
@@ -207,41 +199,71 @@ static void layer_conv2d_s8(
     }
 }
 
-// --- Restore layer_global_avg_pool_s8 body ---
+// --- Forward declarations needed for GAP modification ---
+static float dequantize_u8_to_f32(act_type_t val, float scale, act_type_t zero_point);
+// --- 最终修复 1: 添加一个新的 f64 dequantize 函数 ---
+static double dequantize_u8_to_f64(act_type_t val, double scale, act_type_t zero_point);
+static act_type_t quantize_f64_to_u8(double val, double scale, act_type_t zero_point);
+
+
+// --- MODIFIED: layer_global_avg_pool_s8 to simulate Python's dequant->avg->requant ---
+// --- FIX: Use double precision for float accumulator ---
 static void layer_global_avg_pool_s8(
-    act_type_t* out,
-    const act_type_t* in,
+    act_type_t* out,          // Output buffer (uint8)
+    const act_type_t* in,     // Input buffer (uint8)
     int32_t H, int32_t W, int32_t C,
-    act_type_t in_zp,
-    act_type_t out_zp,
-    const int32_t* out_multiplier,
-    const int32_t* out_shift,
-    int is_per_channel
+    act_type_t in_zp,         // Input zero point
+    act_type_t out_zp,        // Target output zero point (for final requantization)
+    const int32_t* out_multiplier, // NOT USED in this version
+    const int32_t* out_shift,      // NOT USED in this version
+    int is_per_channel             // Should be 0
 ) {
-    LOG_DEBUG("GAP: In(%" PRId32 ",%" PRId32 ",%" PRId32 ") InZp=%"PRIu8" OutZp=%"PRIu8, H, W, C, in_zp, out_zp);
+    LOG_DEBUG("GAP (Simulating Python): In(%" PRId32 ",%" PRId32 ",%" PRId32 ") InZp=%"PRIu8" OutZp=%"PRIu8, H, W, C, in_zp, out_zp);
     const int32_t pool_size = H * W;
     if (pool_size <= 0) {
         LOG_ERROR("GAP pool size is zero or negative!");
         memset(out, out_zp, C * sizeof(act_type_t));
         return;
     }
+
+    // --- Need Input Scale and Target Output Scale ---
+    // These scales are defined in model_meta.h
+    const float in_scale = MODEL_BLOCK2_OUT_SCALE;   // Scale of the input tensor (output of block2.pw)
+    const float out_scale = MODEL_GAP_OUT_SCALE; // Target scale for the output (input scale for Cat)
+
+    if (out_scale <= 0.0f) {
+        LOG_ERROR("GAP output scale is non-positive!");
+        memset(out, out_zp, C * sizeof(act_type_t));
+        return;
+    }
+
+
     for (int32_t c = 0; c < C; ++c) {
-        acc_type_t acc = 0;
+        // --- 1. Accumulate sum in double (float64) to match PyTorch's .mean() precision ---
+        double float_sum = 0.0; // Use double
         for (int32_t h = 0; h < H; ++h) {
             for (int32_t w = 0; w < W; ++w) {
-                acc = saturate_add_s32(acc,
-                                       (acc_type_t)in[get_index_nchw(h, w, c, H, W)]
-                                       - (acc_type_t)in_zp);
+                act_type_t q_val = in[get_index_nchw(h, w, c, H, W)];
+                // --- 最终修复 2: 调用 f64 dequantize, 在 double 精度下执行乘法 ---
+                double dq_val = dequantize_u8_to_f64(q_val, (double)in_scale, in_zp);
+                float_sum += dq_val; // Accumulate as double (double + double)
             }
         }
-        int32_t current_multiplier = is_per_channel ? out_multiplier[c] : *out_multiplier;
-        int32_t current_shift = is_per_channel ? out_shift[c] : *out_shift;
-        act_type_t out_val = requantize_s32_to_u8(acc, current_multiplier, current_shift, out_zp);
+
+        // --- 2. Calculate float average (in double) ---
+        double float_avg = float_sum / (double)pool_size; // Use double
+        LOG_TRACE("  GAP Ch %d: float_sum=%.6e, float_avg=%.6e", c, float_sum, float_avg);
+
+        // --- 3. Requantize the float average to target uint8 ---
+        // (This already calls quantize_f64_to_u8)
+        act_type_t out_val = quantize_f64_to_u8(float_avg, (double)out_scale, out_zp);
+        LOG_TRACE("  GAP Ch %d: requantized_avg (uint8)=%u", c, out_val);
+
         out[c] = out_val;
     }
 }
 
-// --- Restore layer_linear_s8 body ---
+
 static void layer_linear_s8(
     act_type_t* out,
     const act_type_t* in,
@@ -266,8 +288,14 @@ static void layer_linear_s8(
         acc = saturate_add_s32(acc, bias[out_c]); // Add bias AFTER MAC loop
 
         int32_t current_multiplier; int32_t current_shift;
-        if (p->is_per_channel) { current_multiplier = out_multiplier_per_channel[out_c]; current_shift = out_shift_per_channel[out_c]; }
-        else { current_multiplier = *out_multiplier_per_channel; current_shift = *out_shift_per_channel; }
+        if (p->is_per_channel) { 
+            current_multiplier = out_multiplier_per_channel[out_c]; 
+            current_shift = out_shift_per_channel[out_c];
+        }
+        else { 
+            current_multiplier = *out_multiplier_per_channel; 
+            current_shift = *out_shift_per_channel; 
+        }
         act_type_t out_val = requantize_s32_to_u8(acc, current_multiplier, current_shift, p->out_zp);
         if (p->relu) {
             out_val = (out_val < relu_limit) ? relu_limit : out_val;
@@ -276,16 +304,23 @@ static void layer_linear_s8(
     }
 }
 
-// --- Restore layer_cat_s8 body ---
 static void layer_cat_s8( act_type_t* out, const act_type_t* in1, int32_t C1, const act_type_t* in2, int32_t C2) {
+    // --- 检查 qparam。现在 C 代码的 meta_q 输入应该与 gap_out 匹配
+    if (MODEL_GAP_OUT_ZERO_POINT != MODEL_INPUT_META_ZERO_POINT || MODEL_CAT_OUT_ZERO_POINT != MODEL_GAP_OUT_ZERO_POINT) {
+        // --- BUG 1 修复后, 这个警告不应该再触发 ---
+        // (除非 meta_q 的 scale/zp 与 cat 的 scale/zp 仍有不同)
+        LOG_WARN("Cat qparams mismatch: GAP_OUT_ZP=%u, META_IN_ZP=%u, CAT_OUT_ZP=%u",
+                 MODEL_GAP_OUT_ZERO_POINT, MODEL_INPUT_META_ZERO_POINT, MODEL_CAT_OUT_ZERO_POINT);
+    }
+    // Bug 1 修复后, 两个输入的 qparams 应该匹配, memcpy 是正确的
     memcpy(out,      in1, C1 * sizeof(act_type_t));
     memcpy(out + C1, in2, C2 * sizeof(act_type_t));
 }
 
+
 // =================================================================
 // 3. 模型图
 // =================================================================
-// --- Param instantiations remain the same ---
 static const ConvParams P_BLOCK1_DW = { .H = 3, .W = 7, .C = 2, .OH = 3, .OW = 7, .OC = 2, .K = 3, .S = 1, .P = 1, .G = 2, .in_zp = MODEL_INPUT_X_ZERO_POINT, .out_zp = MODEL_BLOCK1_DW_OUT_ZERO_POINT, .relu = 0, .is_per_channel = MODEL_BLOCK1_DW_IS_PER_CHANNEL };
 static const ConvParams P_BLOCK1_PW = { .H = 3, .W = 7, .C = 2, .OH = 3, .OW = 7, .OC = 4, .K = 1, .S = 1, .P = 0, .G = 1, .in_zp = MODEL_BLOCK1_DW_OUT_ZERO_POINT, .out_zp = MODEL_BLOCK1_OUT_ZERO_POINT, .relu = 1, .is_per_channel = MODEL_BLOCK1_PW_IS_PER_CHANNEL };
 static const ConvParams P_BLOCK2_DW = { .H = 3, .W = 7, .C = 4, .OH = 3, .OW = 7, .OC = 4, .K = 3, .S = 1, .P = 1, .G = 4, .in_zp = MODEL_BLOCK1_OUT_ZERO_POINT, .out_zp = MODEL_BLOCK2_DW_OUT_ZERO_POINT, .relu = 0, .is_per_channel = MODEL_BLOCK2_DW_IS_PER_CHANNEL };
@@ -293,7 +328,6 @@ static const ConvParams P_BLOCK2_PW = { .H = 3, .W = 7, .C = 4, .OH = 3, .OW = 7
 static const LinearParams P_HEAD_0 = { .In = 6, .Out = 8, .in_zp = MODEL_CAT_OUT_ZERO_POINT, .out_zp = MODEL_HEAD0_OUT_ZERO_POINT, .relu = 1, .is_per_channel = MODEL_HEAD_0_IS_PER_CHANNEL };
 static const LinearParams P_HEAD_2 = { .In = 8, .Out = 2, .in_zp = MODEL_HEAD0_OUT_ZERO_POINT, .out_zp = MODEL_OUTPUT_ZERO_POINT, .relu = 0, .is_per_channel = MODEL_HEAD_2_IS_PER_CHANNEL };
 
-// --- Restore model_forward_s8 body ---
 int model_forward_s8(
     const act_type_t* x_q,
     const act_type_t* meta_q,
@@ -302,86 +336,117 @@ int model_forward_s8(
 ) {
     LOG_DEBUG("Model Forward (Quantized - uint8 activations, Adjusted MAC)");
 
-    act_type_t* buf_conv0 = (act_type_t*)(arena);               // 84 bytes (4*3*7)
-    act_type_t* buf_conv1 = (act_type_t*)(arena + 84);           // 84 bytes (4*3*7)
-    act_type_t* buf_gap   = (act_type_t*)(arena + 84 + 84);      // 4 bytes
-    act_type_t* buf_cat   = (act_type_t*)(arena + 84 + 84 + 4);  // 6 bytes
+    // Arena buffer allocation
+    act_type_t* buf_block1_dw_out = (act_type_t*)(arena);               // Size: 42
+    act_type_t* buf_block1_pw_out = (act_type_t*)(arena + 42);          // Size: 84
+    act_type_t* buf_block2_dw_out = (act_type_t*)(arena + 42 + 84);     // Size: 84
+    act_type_t* buf_block2_pw_out = (act_type_t*)(arena + 42 + 84 + 84);// Size: 84
+    act_type_t* buf_gap_out       = (act_type_t*)(arena + 42 + 84 + 84 + 84); // Size: 4
+    act_type_t* buf_cat_out       = (act_type_t*)(arena + 42 + 84 + 84 + 84 + 4); // Size: 6
+    act_type_t* buf_head0_out     = (act_type_t*)(arena + 42 + 84 + 84 + 84 + 4 + 6); // Size: 8
 
-    #if MODEL_ARENA_SIZE < (84 + 84 + 4 + 6)
+    // Check required arena size
+    const size_t required_arena = 42 + 84 + 84 + 84 + 4 + 6 + 8; // Sum of buffer sizes
+    #if MODEL_ARENA_SIZE < required_arena
     #error "MODEL_ARENA_SIZE is too small for activation buffers"
     #endif
 
-    const size_t size_block1_dw = 1*2*3*7;
-    const size_t size_block1_pw = 1*4*3*7;
-    const size_t size_block2_dw = 1*4*3*7;
-    const size_t size_block2_pw = 1*4*3*7;
+    // Sizes for dumping (match buffer sizes)
+    const size_t size_block1_dw = 42;
+    const size_t size_block1_pw = 84;
+    const size_t size_block2_dw = 84;
+    const size_t size_block2_pw = 84;
     const size_t size_gap       = 4;
     const size_t size_cat       = 6;
     const size_t size_head0     = 8;
-    const size_t size_head2     = 2;
+    const size_t size_head2     = 2; // Final output size
 
+    // --- Block 1 ---
+    layer_conv2d_s8(buf_block1_dw_out, x_q, g_block1_dw_weight, g_block1_dw_bias, &P_BLOCK1_DW, g_block1_dw_multiplier, g_block1_dw_shift);
+    dump_intermediate_tensor("block1_dw_q", buf_block1_dw_out, size_block1_dw);
 
-    
-    if (MODEL_GAP_OUT_ZERO_POINT != MODEL_INPUT_META_ZERO_POINT || MODEL_CAT_OUT_ZERO_POINT != MODEL_GAP_OUT_ZERO_POINT) { LOG_WARN("Cat qparams mismatch...");}
-    layer_conv2d_s8(buf_conv0, buf_conv1, g_block2_dw_weight, g_block2_dw_bias, &P_BLOCK2_DW, g_block2_dw_multiplier, g_block2_dw_shift);
-    dump_intermediate_tensor("block2_dw_q", buf_conv0, size_block2_dw);
+    layer_conv2d_s8(buf_block1_pw_out, buf_block1_dw_out, g_block1_pw_weight, g_block1_pw_bias, &P_BLOCK1_PW, g_block1_pw_multiplier, g_block1_pw_shift);
+    dump_intermediate_tensor("block1_pw_q", buf_block1_pw_out, size_block1_pw);
 
-    layer_conv2d_s8(buf_conv1, buf_conv0, g_block2_pw_weight, g_block2_pw_bias, &P_BLOCK2_PW, g_block2_pw_multiplier, g_block2_pw_shift);
-    dump_intermediate_tensor("block2_pw_q", buf_conv1, size_block2_pw);
+    // --- Block 2 ---
+    layer_conv2d_s8(buf_block2_dw_out, buf_block1_pw_out, g_block2_dw_weight, g_block2_dw_bias, &P_BLOCK2_DW, g_block2_dw_multiplier, g_block2_dw_shift);
+    dump_intermediate_tensor("block2_dw_q", buf_block2_dw_out, size_block2_dw);
 
-    layer_global_avg_pool_s8(buf_gap, buf_conv1, 3, 7, 4, MODEL_BLOCK2_OUT_ZERO_POINT, MODEL_GAP_OUT_ZERO_POINT,
-                             g_gap_out_multiplier, g_gap_out_shift, MODEL_GAP_OUT_IS_PER_CHANNEL);
-    dump_intermediate_tensor("gap_requant_q", buf_gap, size_gap);
+    layer_conv2d_s8(buf_block2_pw_out, buf_block2_dw_out, g_block2_pw_weight, g_block2_pw_bias, &P_BLOCK2_PW, g_block2_pw_multiplier, g_block2_pw_shift);
+    dump_intermediate_tensor("block2_pw_q", buf_block2_pw_out, size_block2_pw);
 
-    if (MODEL_GAP_OUT_ZERO_POINT != MODEL_INPUT_META_ZERO_POINT || MODEL_CAT_OUT_ZERO_POINT != MODEL_GAP_OUT_ZERO_POINT) { LOG_WARN("Cat qparams mismatch...");}
-    layer_cat_s8(buf_cat, buf_gap, 4, meta_q, 2);
-    dump_intermediate_tensor("cat_q", buf_cat, size_cat);
+    // --- GAP (Now using the modified version simulating Python) ---
+    layer_global_avg_pool_s8(buf_gap_out, buf_block2_pw_out, 3, 7, 4,
+                             MODEL_BLOCK2_OUT_ZERO_POINT, // Input ZP
+                             MODEL_GAP_OUT_ZERO_POINT,    // Target Output ZP
+                             NULL, // g_gap_out_multiplier (ignored)
+                             NULL, // g_gap_out_shift (ignored)
+                             0     // MODEL_GAP_OUT_IS_PER_CHANNEL (ignored but should be 0)
+                            );
+    dump_intermediate_tensor("gap_requant_q", buf_gap_out, size_gap);
 
-    layer_linear_s8(buf_conv0, buf_cat, g_head_0_weight, g_head_0_bias, &P_HEAD_0, g_head_0_multiplier, g_head_0_shift);
-    dump_intermediate_tensor("head0_q", buf_conv0, size_head0);
+    // --- Cat ---
+    // meta_q 已经被 model_quantize_inputs 转换
+    layer_cat_s8(buf_cat_out, buf_gap_out, 4, meta_q, 2);
+    dump_intermediate_tensor("cat_q", buf_cat_out, size_cat);
 
-    layer_linear_s8(out_q, buf_conv0, g_head_2_weight, g_head_2_bias, &P_HEAD_2, g_head_2_multiplier, g_head_2_shift);
-    dump_intermediate_tensor("head2_q", out_q, size_head2);
+    // --- Head ---
+    layer_linear_s8(buf_head0_out, buf_cat_out, g_head_0_weight, g_head_0_bias, &P_HEAD_0, g_head_0_multiplier, g_head_0_shift);
+    dump_intermediate_tensor("head0_q", buf_head0_out, size_head0);
+
+    layer_linear_s8(out_q, buf_head0_out, g_head_2_weight, g_head_2_bias, &P_HEAD_2, g_head_2_multiplier, g_head_2_shift);
+    dump_intermediate_tensor("head2_q", out_q, size_head2); // Dump final quantized output
+
+    LOG_DEBUG("Model Forward Done.");
     return 0; // Ensure return 0 on success
 }
 
-
 // =================================================================
-// 4. 浮点封装辅助函数 (Restore bodies)
+// 4. 浮点封装辅助函数
 // =================================================================
 static inline float a_tanh_f32(float x) { return tanhf(x); }
 
-// --- 修正: Restore quantize_f32_to_u8 body (use roundf) ---
-static act_type_t quantize_f32_to_u8(float val, float scale, act_type_t zero_point) {
-    LOG_TRACE("quantize_f32_to_u8(val=%.4e, scale=%.4e, zp=%u)", val, scale, zero_point);
-    if (scale <= 0.0f || isnan(scale) || isinf(scale)) { // Check for <= 0
+// --- 修正: quantize_f32_to_u8 -> quantize_f64_to_u8 (use C99 round) ---
+static act_type_t quantize_f64_to_u8(double val, double scale, act_type_t zero_point) {
+    LOG_TRACE("quantize_f64_to_u8(val=%.6e, scale=%.6e, zp=%u)", val, scale, zero_point);
+    if (scale <= 0.0 || isnan(scale) || isinf(scale)) { // Check for <= 0
         LOG_WARN("Quantization scale is non-positive, NaN or Inf!");
         return zero_point;
     }
-    float div_result = val / scale;
+    double div_result = val / scale;
     if (isnan(div_result) || isinf(div_result)){
-        LOG_WARN("Intermediate division result is NaN or Inf (val=%.4e / scale=%.4e)", val, scale);
-        return (val >= 0.0f) ? UINT8_MAX : 0;
+        LOG_WARN("Intermediate division result is NaN or Inf (val=%.6e / scale=%.6e)", val, scale);
+        // Match PyTorch behavior for Inf/NaN (often saturates)
+        return (val >= 0.0) ? UINT8_MAX : 0;
     }
-    float q_val_f = div_result + zero_point;
-    LOG_TRACE("  Intermediate q_val_f = %.4f", q_val_f);
-    
-    // --- 修正: Revert to round-half-away-from-zero ---
-    if (q_val_f >= 0.0f) {
-        q_val_f = floorf(q_val_f + 0.5f);
-    } else {
-        q_val_f = ceilf(q_val_f - 0.5f);
-    }
-    
-    LOG_TRACE("  Rounded q_val_f = %.1f", q_val_f);
-    if (q_val_f > 255.0f) q_val_f = 255.0f;
-    if (q_val_f < 0.0f) q_val_f = 0.0f;
-    act_type_t result = (act_type_t)q_val_f;
+    double q_val_f = div_result + zero_point;
+    LOG_TRACE("  Intermediate q_val_f = %.6f", q_val_f);
+
+    // --- 最终修复: 切换回 "round-half-up" (floor(x+0.5)) 以匹配 TFLite 整数 requant 逻辑 ---
+    // (这假设 q_val_f 总是 >= 0, 因为它是 (val/scale) + zero_point)
+    double rounded_q_val_f = floor(q_val_f + 0.5);
+
+    LOG_TRACE("  Rounded (floor(x+0.5)/half-up) q_val_f = %.1f", rounded_q_val_f);
+
+    // Clamp to uint8 range
+    if (rounded_q_val_f > 255.0) rounded_q_val_f = 255.0;
+    if (rounded_q_val_f < 0.0) rounded_q_val_f = 0.0;
+
+    act_type_t result = (act_type_t)rounded_q_val_f;
     LOG_TRACE("  Clamped result = %u", result);
     return result;
 }
 
-// --- Restore dequantize_u8_to_f32 body ---
+// --- 最终修复 1 (续): 添加 f64 dequantize 函数 ---
+static double dequantize_u8_to_f64(act_type_t val, double scale, act_type_t zero_point) {
+    // 跟踪日志在 f64 中意义不大, 暂时禁用
+    // LOG_TRACE("dequantize_u8_to_f64(val=%u, scale=%.6e, zp=%u)", val, scale, zero_point);
+    double result = ((double)val - (double)zero_point) * scale;
+    // LOG_TRACE("  Dequantized result = %.6e", result);
+    // if (isnan(result) || isinf(result)) { LOG_WARN("Dequantization resulted in NaN or Inf!"); }
+    return result;
+}
+
 static float dequantize_u8_to_f32(act_type_t val, float scale, act_type_t zero_point) {
     LOG_TRACE("dequantize_u8_to_f32(val=%u, scale=%.4e, zp=%u)", val, scale, zero_point);
     float result = ((float)val - (float)zero_point) * scale;
@@ -390,21 +455,30 @@ static float dequantize_u8_to_f32(act_type_t val, float scale, act_type_t zero_p
     return result;
 }
 
-// --- Restore model_quantize_inputs body ---
 void model_quantize_inputs( const float* x_f, const float* meta_f, act_type_t* x_q, act_type_t* meta_q) {
     LOG_DEBUG("Quantizing inputs to uint8...");
-    for (int i = 0; i < MODEL_INPUT_X_SHAPE_SIZE; ++i) { x_q[i] = quantize_f32_to_u8(x_f[i], MODEL_INPUT_X_SCALE, MODEL_INPUT_X_ZERO_POINT); }
-    for (int i = 0; i < MODEL_INPUT_META_SHAPE_SIZE; ++i) { meta_q[i] = quantize_f32_to_u8(meta_f[i], MODEL_INPUT_META_SCALE, MODEL_INPUT_META_ZERO_POINT); }
+    // Input X: Quantize normally
+    for (int i = 0; i < MODEL_INPUT_X_SHAPE_SIZE; ++i) { 
+        x_q[i] = quantize_f64_to_u8((double)x_f[i], (double)MODEL_INPUT_X_SCALE, MODEL_INPUT_X_ZERO_POINT); 
+    }
+    
+    // --- FIX 1: Quantize META input using CAT's input scale/zp ---
+    // This matches the logic in verify_with_python.py where meta is quantized to cat's params
+    LOG_DEBUG("Quantizing meta input to CAT's scale/zp (SCALE=%.4e, ZP=%u)", MODEL_GAP_OUT_SCALE, MODEL_GAP_OUT_ZERO_POINT);
+    for (int i = 0; i < MODEL_INPUT_META_SHAPE_SIZE; ++i) { 
+        meta_q[i] = quantize_f64_to_u8((double)meta_f[i], (double)MODEL_GAP_OUT_SCALE, MODEL_GAP_OUT_ZERO_POINT); 
+    }
+
     #ifdef DUMP_INTERMEDIATES
     dump_intermediate_tensor("input_x_q", x_q, MODEL_INPUT_X_SHAPE_SIZE);
     dump_intermediate_tensor("input_meta_q", meta_q, MODEL_INPUT_META_SHAPE_SIZE);
     #endif
 }
 
-// --- Restore model_dequantize_and_postprocess body ---
 void model_dequantize_and_postprocess( const act_type_t* out_q, float* final_out_f) {
     LOG_DEBUG("Dequantizing uint8 output and post-processing...");
     float out_f[MODEL_OUTPUT_SHAPE_SIZE];
+    // (final output dequantize can safely use f32)
     out_f[0] = dequantize_u8_to_f32(out_q[0], MODEL_OUTPUT_SCALE, MODEL_OUTPUT_ZERO_POINT);
     out_f[1] = dequantize_u8_to_f32(out_q[1], MODEL_OUTPUT_SCALE, MODEL_OUTPUT_ZERO_POINT);
     float tanh_out_f[MODEL_OUTPUT_SHAPE_SIZE];
