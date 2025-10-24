@@ -49,7 +49,28 @@
 - 生成黄金数据
   - `python3 convert/offset/tools/verify_with_python.py --model-in best_int8.pt --data-dir <dir> --data-file <file.json> --out-dir convert/offset/verify_data`
 - 运行验证
-  - `convert/offset/build/verify convert/offset/verify_data`
+ - `convert/offset/build/verify convert/offset/verify_data`
+
+直接推理（CLI）
+- 构建 CLI
+  - `make -C convert/offset infer`
+- 运行（两种模式）
+  - 浮点模式（默认，内部自动量化→推理→反量化与后处理）
+    - `convert/offset/build/infer --x <x_f32.bin> --meta <meta_f32.bin> [--out out_f32.bin]`
+    - 示例（复用验证生成的输入）：
+      - `convert/offset/build/infer --x convert/offset/verify_data/input_x.bin --meta convert/offset/verify_data/input_meta.bin --out convert/offset/verify_data/infer_out.bin`
+    - 输入/输出格式：
+      - `x_f32.bin`：float32，长度 `MODEL_INPUT_X_SHAPE_SIZE`（[1,2,3,7]）。
+      - `meta_f32.bin`：float32，长度 `MODEL_INPUT_META_SHAPE_SIZE`（[1,2]）。
+      - 输出 `out_f32.bin`：float32（dx, dy），长度 `MODEL_OUTPUT_SHAPE_SIZE`。
+  - 量化模式（纯 uint8 输入/输出）
+    - `convert/offset/build/infer --quantized --x <x_u8.bin> --meta <meta_u8.bin> [--out-q out_u8.bin] [--out out_f32.bin]`
+    - 功能：直接喂入 uint8 输入，输出 uint8，同时打印并可保存反量化后处理的 float 结果。
+    - 输入/输出格式：
+      - `x_u8.bin`：uint8，长度 `MODEL_INPUT_X_SHAPE_SIZE`。
+      - `meta_u8.bin`：uint8，长度 `MODEL_INPUT_META_SHAPE_SIZE`。
+      - `out_u8.bin`：uint8，长度 `MODEL_OUTPUT_SHAPE_SIZE`（可选，通过 `--out-q` 保存）。
+      - `out_f32.bin`：float32，长度 `MODEL_OUTPUT_SHAPE_SIZE`（可选，通过 `--out` 保存，值为经 tanh 与缩放的最终输出）。
 
 文件/参数说明与小贴士
 - `include/config.h`
