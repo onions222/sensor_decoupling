@@ -182,8 +182,65 @@ static void layer_dwconv3x3_s8(
     const int32_t OH = p->OH, OW = p->OW;
     const acc_type_t in_zp = (acc_type_t)p->in_zp;
     const act_type_t relu_limit = p->out_zp;
+    // Fast path for H=3, W=7: use small padded scratch (5x9) to remove boundary checks
+    if (H == 3 && W == 7) {
+        for (int32_t c = 0; c < C; ++c) {
+            const weight_type_t* w = weight + c * 9;
+            // Precompute sum_w per channel (fold input zero point)
+            acc_type_t sum_w = 0; for (int k = 0; k < 9; ++k) sum_w = saturate_add_s32(sum_w, (acc_type_t)w[k]);
+            // Build padded buffer [5 x 9] with edge replication
+            uint8_t pad[5*9];
+            // Center copy
+            for (int r = 0; r < 3; ++r) {
+                for (int ccol = 0; ccol < 7; ++ccol) {
+                    int src_idx = get_index_nchw(r, ccol, c, H, W);
+                    pad[(r+1)*9 + (ccol+1)] = in[src_idx];
+                }
+            }
+            // Replicate left/right edges
+            for (int r = 0; r < 3; ++r) {
+                pad[(r+1)*9 + 0] = pad[(r+1)*9 + 1];           // left
+                pad[(r+1)*9 + 8] = pad[(r+1)*9 + 7];           // right
+            }
+            // Replicate top/bottom rows
+            for (int ccol = 0; ccol < 9; ++ccol) {
+                pad[0*9 + ccol] = pad[1*9 + ccol];             // top
+                pad[4*9 + ccol] = pad[3*9 + ccol];             // bottom
+            }
+
+            // Convolve without boundary checks
+            for (int32_t oh = 0; oh < OH; ++oh) {
+                for (int32_t ow = 0; ow < OW; ++ow) {
+                    int base = (oh)*9 + (ow);
+                    acc_type_t acc = 0;
+                    acc = saturate_add_s32(acc, ((acc_type_t)pad[base + 0] * (acc_type_t)w[0]));
+                    acc = saturate_add_s32(acc, ((acc_type_t)pad[base + 1] * (acc_type_t)w[1]));
+                    acc = saturate_add_s32(acc, ((acc_type_t)pad[base + 2] * (acc_type_t)w[2]));
+                    acc = saturate_add_s32(acc, ((acc_type_t)pad[base + 9] * (acc_type_t)w[3]));
+                    acc = saturate_add_s32(acc, ((acc_type_t)pad[base +10] * (acc_type_t)w[4]));
+                    acc = saturate_add_s32(acc, ((acc_type_t)pad[base +11] * (acc_type_t)w[5]));
+                    acc = saturate_add_s32(acc, ((acc_type_t)pad[base +18] * (acc_type_t)w[6]));
+                    acc = saturate_add_s32(acc, ((acc_type_t)pad[base +19] * (acc_type_t)w[7]));
+                    acc = saturate_add_s32(acc, ((acc_type_t)pad[base +20] * (acc_type_t)w[8]));
+                    // Fold input zp and add bias
+                    acc = saturate_add_s32(acc, (acc_type_t)(-in_zp) * sum_w);
+                    if (bias) { acc = saturate_add_s32(acc, bias[c]); }
+                    int32_t mult = p->is_per_channel ? out_multiplier[c] : out_multiplier[0];
+                    int32_t sh   = p->is_per_channel ? out_shift[c]      : out_shift[0];
+                    act_type_t out_val = requantize_s32_to_u8(acc, mult, sh, p->out_zp);
+                    if (p->relu) { out_val = (out_val < relu_limit) ? relu_limit : out_val; }
+                    out[get_index_nchw(oh, ow, c, OH, OW)] = out_val;
+                }
+            }
+        }
+        return;
+    }
+
+    // Fallback (generic, with boundary checks)
     for (int32_t c = 0; c < C; ++c) {
         const weight_type_t* w = weight + c * 9;
+        // Precompute sum_w per channel
+        acc_type_t sum_w = 0; for (int k = 0; k < 9; ++k) sum_w = saturate_add_s32(sum_w, (acc_type_t)w[k]);
         for (int32_t oh = 0; oh < OH; ++oh) {
             const int32_t base_h = oh - 1;
             for (int32_t ow = 0; ow < OW; ++ow) {
@@ -191,24 +248,26 @@ static void layer_dwconv3x3_s8(
                 acc_type_t acc = 0;
                 int32_t ih, iw, idx;
                 ih = base_h + 0; iw = base_w + 0;
-                if ((unsigned)ih < (unsigned)H && (unsigned)iw < (unsigned)W) { idx = get_index_nchw(ih, iw, c, H, W); acc = saturate_add_s32(acc, (((acc_type_t)in[idx] - in_zp) * (acc_type_t)w[0])); }
+                if ((unsigned)ih < (unsigned)H && (unsigned)iw < (unsigned)W) { idx = get_index_nchw(ih, iw, c, H, W); acc = saturate_add_s32(acc, ((acc_type_t)in[idx] * (acc_type_t)w[0])); }
                 ih = base_h + 0; iw = base_w + 1;
-                if ((unsigned)ih < (unsigned)H && (unsigned)iw < (unsigned)W) { idx = get_index_nchw(ih, iw, c, H, W); acc = saturate_add_s32(acc, (((acc_type_t)in[idx] - in_zp) * (acc_type_t)w[1])); }
+                if ((unsigned)ih < (unsigned)H && (unsigned)iw < (unsigned)W) { idx = get_index_nchw(ih, iw, c, H, W); acc = saturate_add_s32(acc, ((acc_type_t)in[idx] * (acc_type_t)w[1])); }
                 ih = base_h + 0; iw = base_w + 2;
-                if ((unsigned)ih < (unsigned)H && (unsigned)iw < (unsigned)W) { idx = get_index_nchw(ih, iw, c, H, W); acc = saturate_add_s32(acc, (((acc_type_t)in[idx] - in_zp) * (acc_type_t)w[2])); }
+                if ((unsigned)ih < (unsigned)H && (unsigned)iw < (unsigned)W) { idx = get_index_nchw(ih, iw, c, H, W); acc = saturate_add_s32(acc, ((acc_type_t)in[idx] * (acc_type_t)w[2])); }
                 ih = base_h + 1; iw = base_w + 0;
-                if ((unsigned)ih < (unsigned)H && (unsigned)iw < (unsigned)W) { idx = get_index_nchw(ih, iw, c, H, W); acc = saturate_add_s32(acc, (((acc_type_t)in[idx] - in_zp) * (acc_type_t)w[3])); }
+                if ((unsigned)ih < (unsigned)H && (unsigned)iw < (unsigned)W) { idx = get_index_nchw(ih, iw, c, H, W); acc = saturate_add_s32(acc, ((acc_type_t)in[idx] * (acc_type_t)w[3])); }
                 ih = base_h + 1; iw = base_w + 1;
-                if ((unsigned)ih < (unsigned)H && (unsigned)iw < (unsigned)W) { idx = get_index_nchw(ih, iw, c, H, W); acc = saturate_add_s32(acc, (((acc_type_t)in[idx] - in_zp) * (acc_type_t)w[4])); }
+                if ((unsigned)ih < (unsigned)H && (unsigned)iw < (unsigned)W) { idx = get_index_nchw(ih, iw, c, H, W); acc = saturate_add_s32(acc, ((acc_type_t)in[idx] * (acc_type_t)w[4])); }
                 ih = base_h + 1; iw = base_w + 2;
-                if ((unsigned)ih < (unsigned)H && (unsigned)iw < (unsigned)W) { idx = get_index_nchw(ih, iw, c, H, W); acc = saturate_add_s32(acc, (((acc_type_t)in[idx] - in_zp) * (acc_type_t)w[5])); }
+                if ((unsigned)ih < (unsigned)H && (unsigned)iw < (unsigned)W) { idx = get_index_nchw(ih, iw, c, H, W); acc = saturate_add_s32(acc, ((acc_type_t)in[idx] * (acc_type_t)w[5])); }
                 ih = base_h + 2; iw = base_w + 0;
-                if ((unsigned)ih < (unsigned)H && (unsigned)iw < (unsigned)W) { idx = get_index_nchw(ih, iw, c, H, W); acc = saturate_add_s32(acc, (((acc_type_t)in[idx] - in_zp) * (acc_type_t)w[6])); }
+                if ((unsigned)ih < (unsigned)H && (unsigned)iw < (unsigned)W) { idx = get_index_nchw(ih, iw, c, H, W); acc = saturate_add_s32(acc, ((acc_type_t)in[idx] * (acc_type_t)w[6])); }
                 ih = base_h + 2; iw = base_w + 1;
-                if ((unsigned)ih < (unsigned)H && (unsigned)iw < (unsigned)W) { idx = get_index_nchw(ih, iw, c, H, W); acc = saturate_add_s32(acc, (((acc_type_t)in[idx] - in_zp) * (acc_type_t)w[7])); }
+                if ((unsigned)ih < (unsigned)H && (unsigned)iw < (unsigned)W) { idx = get_index_nchw(ih, iw, c, H, W); acc = saturate_add_s32(acc, ((acc_type_t)in[idx] * (acc_type_t)w[7])); }
                 ih = base_h + 2; iw = base_w + 2;
-                if ((unsigned)ih < (unsigned)H && (unsigned)iw < (unsigned)W) { idx = get_index_nchw(ih, iw, c, H, W); acc = saturate_add_s32(acc, (((acc_type_t)in[idx] - in_zp) * (acc_type_t)w[8])); }
+                if ((unsigned)ih < (unsigned)H && (unsigned)iw < (unsigned)W) { idx = get_index_nchw(ih, iw, c, H, W); acc = saturate_add_s32(acc, ((acc_type_t)in[idx] * (acc_type_t)w[8])); }
 
+                // Fold input zero-point and add bias
+                acc = saturate_add_s32(acc, (acc_type_t)(-in_zp) * sum_w);
                 if (bias) { acc = saturate_add_s32(acc, bias[c]); }
                 int32_t mult = p->is_per_channel ? out_multiplier[c] : out_multiplier[0];
                 int32_t sh   = p->is_per_channel ? out_shift[c]      : out_shift[0];
@@ -241,8 +300,12 @@ static void layer_pointwise1x1_s8(
                 const weight_type_t* w = weight + oc * IC;
                 for (int32_t ic = 0; ic < IC; ++ic) {
                     int32_t in_idx = get_index_nchw(oh, ow, ic, H, W);
-                    acc = saturate_add_s32(acc, (((acc_type_t)in[in_idx] - in_zp) * (acc_type_t)w[ic]));
+                    acc = saturate_add_s32(acc, ((acc_type_t)in[in_idx] * (acc_type_t)w[ic]));
                 }
+                // Fold input zero-point: -in_zp * sum_w_per_oc
+                acc_type_t sum_w = 0;
+                for (int32_t ic = 0; ic < IC; ++ic) sum_w = saturate_add_s32(sum_w, (acc_type_t)w[ic]);
+                acc = saturate_add_s32(acc, (acc_type_t)(-in_zp) * sum_w);
                 if (bias) { acc = saturate_add_s32(acc, bias[oc]); }
                 int32_t mult = p->is_per_channel ? out_multiplier[oc] : out_multiplier[0];
                 int32_t sh   = p->is_per_channel ? out_shift[oc]      : out_shift[0];
@@ -400,67 +463,30 @@ static void layer_global_avg_pool_s8(
     int32_t H, int32_t W, int32_t C,
     act_type_t in_zp,
     act_type_t out_zp,
-    const int32_t* out_multiplier, // Ignored
-    const int32_t* out_shift,      // Ignored
-    int is_per_channel             // Ignored
+    const int32_t* out_multiplier_unused,
+    const int32_t* out_shift_unused,
+    int is_per_channel_unused
 ) {
-    (void)out_multiplier; // Mark as unused
-    (void)out_shift;      // Mark as unused
-    (void)is_per_channel; // Mark as unused
-
-    LOG_DEBUG("GAP (Simulating PyTorch Dequant->Avg->Requant): In(%ld,%ld,%ld) InZp=%u OutZp=%u",
-              (long)H, (long)W, (long)C, in_zp, out_zp);
-
-    const int32_t pool_size = H * W; // Number of elements to average per channel
+    (void)out_multiplier_unused; (void)out_shift_unused; (void)is_per_channel_unused;
+    LOG_DEBUG("GAP (Integer): In(%ld,%ld,%ld) InZp=%u OutZp=%u", (long)H, (long)W, (long)C, in_zp, out_zp);
+    const int32_t pool_size = H * W;
     if (pool_size <= 0) {
-        LOG_ERROR("GAP pool size is zero or negative!");
-        // Set output to zero point if pool size is invalid
-        for(int32_t c=0; c<C; ++c) out[c] = out_zp;
-        return;
+        for (int32_t c=0; c<C; ++c) out[c] = out_zp; return;
     }
-
-    // --- Get Input Scale (from Block2 output) and Target Output Scale (for Cat input) ---
-    // These scales are required for the dequantization and requantization steps.
-    const double in_scale_f64 = (double)MODEL_BLOCK2_OUT_SCALE;
-    const double out_scale_f64 = (double)MODEL_GAP_OUT_SCALE; // Target scale = Cat input scale
-
-    if (out_scale_f64 <= 0.0) {
-        LOG_ERROR("GAP output scale (MODEL_GAP_OUT_SCALE) is non-positive!");
-        for(int32_t c=0; c<C; ++c) out[c] = out_zp;
-        return;
-    }
-    if (in_scale_f64 <= 0.0) {
-         LOG_WARN("GAP input scale (MODEL_BLOCK2_OUT_SCALE) is non-positive! Dequantization will be inaccurate.");
-         // Continue, but results will likely be wrong.
-    }
-
-
-    // Loop over each channel
+    // Effective scale pre-packed into g_gap_out_multiplier/shift by exporter:
+    // eff = MODEL_BLOCK2_OUT_SCALE / (MODEL_GAP_OUT_SCALE * pool_size)
     for (int32_t c = 0; c < C; ++c) {
-        // --- Step 1: Accumulate sum in double precision ---
-        double float_sum = 0.0;
+        acc_type_t sum = 0;
         for (int32_t h = 0; h < H; ++h) {
             for (int32_t w = 0; w < W; ++w) {
-                // Get the quantized input value
-                act_type_t q_val = in[get_index_nchw(h, w, c, H, W)];
-                // Dequantize to double
-                double dq_val = dequantize_u8_to_f64(q_val, in_scale_f64, in_zp);
-                // Accumulate
-                float_sum += dq_val;
+                int32_t idx = get_index_nchw(h, w, c, H, W);
+                sum = saturate_add_s32(sum, (acc_type_t)in[idx] - (acc_type_t)in_zp);
             }
         }
-
-        // --- Step 2: Calculate float average (in double precision) ---
-        double float_avg = float_sum / (double)pool_size;
-        LOG_TRACE("  GAP Ch %ld: float_sum=%.6e, float_avg=%.6e", (long)c, float_sum, float_avg);
-
-        // --- Step 3: Requantize the float average back to uint8 ---
-        // Use the target output scale and zero point (from MODEL_GAP_OUT_SCALE/ZP)
-        act_type_t out_val = quantize_f64_to_u8(float_avg, out_scale_f64, out_zp);
-        LOG_TRACE("  GAP Ch %ld: requantized_avg (uint8)=%u (using scale=%.4e, zp=%u)",
-                  (long)c, out_val, out_scale_f64, out_zp);
-
-        // Store the result
+        int ch = (MODEL_GAP_OUT_NUM_CHANNELS <= 1) ? 0 : c;
+        int32_t mult = g_gap_out_multiplier[ch];
+        int32_t sh   = g_gap_out_shift[ch];
+        act_type_t out_val = requantize_s32_to_u8(sum, mult, sh, out_zp);
         out[c] = out_val;
     }
 }
