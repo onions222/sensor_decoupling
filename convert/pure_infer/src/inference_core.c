@@ -70,6 +70,25 @@ static inline int32_t ShiftRightRounded_S64(int64_t val, int32_t shift) {
     return (int32_t)result_64;
 }
 
+// 32-bit requant helpers
+static inline int32_t SaturatingRoundingDoublingHighMul(int32_t a, int32_t b);
+static inline int32_t RoundingDivideByPOT(int32_t x, int exponent);
+
+static inline int32_t SaturatingRoundingDoublingHighMul(int32_t a, int32_t b) {
+    int64_t a_64 = (int64_t)a;
+    int64_t b_64 = (int64_t)b;
+    int64_t ab_64 = a_64 * b_64;
+    int64_t nudge = (ab_64 >= 0) ? (1ll << 30) : -(1ll << 30);
+    return (int32_t)((ab_64 + nudge) >> 31);
+}
+
+static inline int32_t RoundingDivideByPOT(int32_t x, int exponent) {
+    const int32_t mask = (1 << exponent) - 1;
+    const int32_t remainder = x & mask;
+    const int32_t threshold = (mask >> 1) + ((x < 0) ? 1 : 0);
+    return (x >> exponent) + ((remainder > threshold) ? 1 : 0);
+}
+
 
 /**
  * @brief Multiplies an accumulator value by a quantized multiplier and performs shifting.
@@ -83,14 +102,20 @@ static inline int32_t ShiftRightRounded_S64(int64_t val, int32_t shift) {
  * @return The 32-bit scaled and rounded result.
  */
 static int32_t MultiplyByQuantizedMultiplier(acc_type_t x, int32_t quantized_multiplier, int32_t shift) {
-    // Calculate the 64-bit product (potential overflow is handled by 64-bit type)
-    int64_t product = (int64_t)x * quantized_multiplier;
-    LOG_TRACE("  MulByQuantMult: x=%" PRId32 ", mult=%" PRId32 ", shift=%d -> product=%" PRId64, x, quantized_multiplier, shift, product);
-
-    // Apply rounding right shift
-    int32_t result = ShiftRightRounded_S64(product, shift);
-    LOG_TRACE("  MulByQuantMult: -> shifted_rounded=%" PRId32, result);
-    return result;
+    // 32-bit fast path: SRDHM + RoundingDivideByPOT
+    if (shift >= 0) {
+        int32_t prod = SaturatingRoundingDoublingHighMul((int32_t)x, quantized_multiplier);
+        int32_t res = RoundingDivideByPOT(prod, shift);
+        LOG_TRACE("  MulByQuantMult[s32]: x=%" PRId32 ", mult=%" PRId32 ", >>%d -> %" PRId32, x, quantized_multiplier, shift, res);
+        return res;
+    } else {
+        int32_t left_shift = -shift;
+        int64_t shifted = ((int64_t)x) << left_shift;
+        int32_t x_ls = (shifted > INT32_MAX) ? INT32_MAX : (shifted < INT32_MIN ? INT32_MIN : (int32_t)shifted);
+        int32_t res = SaturatingRoundingDoublingHighMul(x_ls, quantized_multiplier);
+        LOG_TRACE("  MulByQuantMult[s32]: (x<<%d) * mult -> %" PRId32, left_shift, res);
+        return res;
+    }
 }
 
 /**
@@ -141,6 +166,92 @@ static inline int32_t get_weight_index_conv(int32_t oc, int32_t kh, int32_t kw, 
            kh * (K * IC_per_G) +       // Offset for kernel height
            kw * (IC_per_G) +           // Offset for kernel width
            ic_g;                       // Offset for input channel within group
+}
+
+// Depthwise 3x3 specialization (S=1, P=1, G=C)
+static void layer_dwconv3x3_s8(
+    act_type_t* restrict out,
+    const act_type_t* restrict in,
+    const weight_type_t* restrict weight,
+    const acc_type_t* restrict bias,
+    const ConvParams* p,
+    const int32_t* out_multiplier,
+    const int32_t* out_shift
+) {
+    const int32_t H = p->H, W = p->W, C = p->C;
+    const int32_t OH = p->OH, OW = p->OW;
+    const acc_type_t in_zp = (acc_type_t)p->in_zp;
+    const act_type_t relu_limit = p->out_zp;
+    for (int32_t c = 0; c < C; ++c) {
+        const weight_type_t* w = weight + c * 9;
+        for (int32_t oh = 0; oh < OH; ++oh) {
+            const int32_t base_h = oh - 1;
+            for (int32_t ow = 0; ow < OW; ++ow) {
+                const int32_t base_w = ow - 1;
+                acc_type_t acc = 0;
+                int32_t ih, iw, idx;
+                ih = base_h + 0; iw = base_w + 0;
+                if ((unsigned)ih < (unsigned)H && (unsigned)iw < (unsigned)W) { idx = get_index_nchw(ih, iw, c, H, W); acc = saturate_add_s32(acc, (((acc_type_t)in[idx] - in_zp) * (acc_type_t)w[0])); }
+                ih = base_h + 0; iw = base_w + 1;
+                if ((unsigned)ih < (unsigned)H && (unsigned)iw < (unsigned)W) { idx = get_index_nchw(ih, iw, c, H, W); acc = saturate_add_s32(acc, (((acc_type_t)in[idx] - in_zp) * (acc_type_t)w[1])); }
+                ih = base_h + 0; iw = base_w + 2;
+                if ((unsigned)ih < (unsigned)H && (unsigned)iw < (unsigned)W) { idx = get_index_nchw(ih, iw, c, H, W); acc = saturate_add_s32(acc, (((acc_type_t)in[idx] - in_zp) * (acc_type_t)w[2])); }
+                ih = base_h + 1; iw = base_w + 0;
+                if ((unsigned)ih < (unsigned)H && (unsigned)iw < (unsigned)W) { idx = get_index_nchw(ih, iw, c, H, W); acc = saturate_add_s32(acc, (((acc_type_t)in[idx] - in_zp) * (acc_type_t)w[3])); }
+                ih = base_h + 1; iw = base_w + 1;
+                if ((unsigned)ih < (unsigned)H && (unsigned)iw < (unsigned)W) { idx = get_index_nchw(ih, iw, c, H, W); acc = saturate_add_s32(acc, (((acc_type_t)in[idx] - in_zp) * (acc_type_t)w[4])); }
+                ih = base_h + 1; iw = base_w + 2;
+                if ((unsigned)ih < (unsigned)H && (unsigned)iw < (unsigned)W) { idx = get_index_nchw(ih, iw, c, H, W); acc = saturate_add_s32(acc, (((acc_type_t)in[idx] - in_zp) * (acc_type_t)w[5])); }
+                ih = base_h + 2; iw = base_w + 0;
+                if ((unsigned)ih < (unsigned)H && (unsigned)iw < (unsigned)W) { idx = get_index_nchw(ih, iw, c, H, W); acc = saturate_add_s32(acc, (((acc_type_t)in[idx] - in_zp) * (acc_type_t)w[6])); }
+                ih = base_h + 2; iw = base_w + 1;
+                if ((unsigned)ih < (unsigned)H && (unsigned)iw < (unsigned)W) { idx = get_index_nchw(ih, iw, c, H, W); acc = saturate_add_s32(acc, (((acc_type_t)in[idx] - in_zp) * (acc_type_t)w[7])); }
+                ih = base_h + 2; iw = base_w + 2;
+                if ((unsigned)ih < (unsigned)H && (unsigned)iw < (unsigned)W) { idx = get_index_nchw(ih, iw, c, H, W); acc = saturate_add_s32(acc, (((acc_type_t)in[idx] - in_zp) * (acc_type_t)w[8])); }
+
+                if (bias) { acc = saturate_add_s32(acc, bias[c]); }
+                int32_t mult = p->is_per_channel ? out_multiplier[c] : out_multiplier[0];
+                int32_t sh   = p->is_per_channel ? out_shift[c]      : out_shift[0];
+                act_type_t out_val = requantize_s32_to_u8(acc, mult, sh, p->out_zp);
+                if (p->relu) { out_val = (out_val < relu_limit) ? relu_limit : out_val; }
+                out[get_index_nchw(oh, ow, c, OH, OW)] = out_val;
+            }
+        }
+    }
+}
+
+// Pointwise 1x1 specialization (S=1, P=0, G=1)
+static void layer_pointwise1x1_s8(
+    act_type_t* restrict out,
+    const act_type_t* restrict in,
+    const weight_type_t* restrict weight,
+    const acc_type_t* restrict bias,
+    const ConvParams* p,
+    const int32_t* out_multiplier,
+    const int32_t* out_shift
+) {
+    const int32_t H = p->H, W = p->W, IC = p->C, OC = p->OC;
+    const int32_t OH = p->OH, OW = p->OW;
+    const acc_type_t in_zp = (acc_type_t)p->in_zp;
+    const act_type_t relu_limit = p->out_zp;
+    for (int32_t oh = 0; oh < OH; ++oh) {
+        for (int32_t ow = 0; ow < OW; ++ow) {
+            for (int32_t oc = 0; oc < OC; ++oc) {
+                acc_type_t acc = 0;
+                const weight_type_t* w = weight + oc * IC;
+                for (int32_t ic = 0; ic < IC; ++ic) {
+                    int32_t in_idx = get_index_nchw(oh, ow, ic, H, W);
+                    acc = saturate_add_s32(acc, (((acc_type_t)in[in_idx] - in_zp) * (acc_type_t)w[ic]));
+                }
+                if (bias) { acc = saturate_add_s32(acc, bias[oc]); }
+                int32_t mult = p->is_per_channel ? out_multiplier[oc] : out_multiplier[0];
+                int32_t sh   = p->is_per_channel ? out_shift[oc]      : out_shift[0];
+                act_type_t out_val = requantize_s32_to_u8(acc, mult, sh, p->out_zp);
+                if (p->relu) { out_val = (out_val < relu_limit) ? relu_limit : out_val; }
+                out[get_index_nchw(oh, ow, oc, OH, OW)] = out_val;
+            }
+        }
+    }
 }
 
 /**
@@ -542,12 +653,28 @@ int model_forward_s8(
     // --- Execute Layer by Layer ---
 
     // --- Block 1 ---
-    layer_conv2d_s8(buf_block1_dw_out, x_q, g_block1_dw_weight, g_block1_dw_bias, &P_BLOCK1_DW, g_block1_dw_multiplier, g_block1_dw_shift);
-    layer_conv2d_s8(buf_block1_pw_out, buf_block1_dw_out, g_block1_pw_weight, g_block1_pw_bias, &P_BLOCK1_PW, g_block1_pw_multiplier, g_block1_pw_shift);
+    if (P_BLOCK1_DW.K == 3 && P_BLOCK1_DW.S == 1 && P_BLOCK1_DW.P == 1 && P_BLOCK1_DW.G == P_BLOCK1_DW.C) {
+        layer_dwconv3x3_s8(buf_block1_dw_out, x_q, g_block1_dw_weight, g_block1_dw_bias, &P_BLOCK1_DW, g_block1_dw_multiplier, g_block1_dw_shift);
+    } else {
+        layer_conv2d_s8(buf_block1_dw_out, x_q, g_block1_dw_weight, g_block1_dw_bias, &P_BLOCK1_DW, g_block1_dw_multiplier, g_block1_dw_shift);
+    }
+    if (P_BLOCK1_PW.K == 1 && P_BLOCK1_PW.S == 1 && P_BLOCK1_PW.P == 0 && P_BLOCK1_PW.G == 1) {
+        layer_pointwise1x1_s8(buf_block1_pw_out, buf_block1_dw_out, g_block1_pw_weight, g_block1_pw_bias, &P_BLOCK1_PW, g_block1_pw_multiplier, g_block1_pw_shift);
+    } else {
+        layer_conv2d_s8(buf_block1_pw_out, buf_block1_dw_out, g_block1_pw_weight, g_block1_pw_bias, &P_BLOCK1_PW, g_block1_pw_multiplier, g_block1_pw_shift);
+    }
 
     // --- Block 2 ---
-    layer_conv2d_s8(buf_block2_dw_out, buf_block1_pw_out, g_block2_dw_weight, g_block2_dw_bias, &P_BLOCK2_DW, g_block2_dw_multiplier, g_block2_dw_shift);
-    layer_conv2d_s8(buf_block2_pw_out, buf_block2_dw_out, g_block2_pw_weight, g_block2_pw_bias, &P_BLOCK2_PW, g_block2_pw_multiplier, g_block2_pw_shift);
+    if (P_BLOCK2_DW.K == 3 && P_BLOCK2_DW.S == 1 && P_BLOCK2_DW.P == 1 && P_BLOCK2_DW.G == P_BLOCK2_DW.C) {
+        layer_dwconv3x3_s8(buf_block2_dw_out, buf_block1_pw_out, g_block2_dw_weight, g_block2_dw_bias, &P_BLOCK2_DW, g_block2_dw_multiplier, g_block2_dw_shift);
+    } else {
+        layer_conv2d_s8(buf_block2_dw_out, buf_block1_pw_out, g_block2_dw_weight, g_block2_dw_bias, &P_BLOCK2_DW, g_block2_dw_multiplier, g_block2_dw_shift);
+    }
+    if (P_BLOCK2_PW.K == 1 && P_BLOCK2_PW.S == 1 && P_BLOCK2_PW.P == 0 && P_BLOCK2_PW.G == 1) {
+        layer_pointwise1x1_s8(buf_block2_pw_out, buf_block2_dw_out, g_block2_pw_weight, g_block2_pw_bias, &P_BLOCK2_PW, g_block2_pw_multiplier, g_block2_pw_shift);
+    } else {
+        layer_conv2d_s8(buf_block2_pw_out, buf_block2_dw_out, g_block2_pw_weight, g_block2_pw_bias, &P_BLOCK2_PW, g_block2_pw_multiplier, g_block2_pw_shift);
+    }
 
     // --- Global Average Pooling ---
     // Uses the modified implementation simulating Python's dequant->avg->requant.
