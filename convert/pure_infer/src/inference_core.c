@@ -168,6 +168,64 @@ static inline int32_t get_weight_index_conv(int32_t oc, int32_t kh, int32_t kw, 
            ic_g;                       // Offset for input channel within group
 }
 
+// =================================================================
+// Folded-bias preparation (precompute (-in_zp)*sum_w + bias per layer)
+// =================================================================
+static int s_bias_prepared = 0;
+static int32_t s_block1_dw_bias_adj[2];
+static int32_t s_block1_pw_bias_adj[4];
+static int32_t s_block2_dw_bias_adj[4];
+static int32_t s_block2_pw_bias_adj[4];
+static int32_t s_head_0_bias_adj[8];
+static int32_t s_head_2_bias_adj[2];
+
+static void prepare_folded_biases(void) {
+    if (s_bias_prepared) return;
+    // Block1 DW: OC=2, each 9 weights, in_zp = MODEL_INPUT_X_ZERO_POINT
+    for (int oc = 0; oc < 2; ++oc) {
+        int32_t sum_w = 0;
+        const int8_t* w = g_block1_dw_weight + oc*9;
+        for (int k=0;k<9;++k) sum_w += (int32_t)w[k];
+        s_block1_dw_bias_adj[oc] = g_block1_dw_bias[oc] + (-(int32_t)MODEL_INPUT_X_ZERO_POINT) * sum_w;
+    }
+    // Block1 PW: OC=4, IC=2, in_zp = MODEL_BLOCK1_DW_OUT_ZERO_POINT
+    for (int oc = 0; oc < 4; ++oc) {
+        int32_t sum_w = 0;
+        const int8_t* w = g_block1_pw_weight + oc*2;
+        for (int ic=0; ic<2; ++ic) sum_w += (int32_t)w[ic];
+        s_block1_pw_bias_adj[oc] = g_block1_pw_bias[oc] + (-(int32_t)MODEL_BLOCK1_DW_OUT_ZERO_POINT) * sum_w;
+    }
+    // Block2 DW: OC=4, each 9 weights, in_zp = MODEL_BLOCK1_OUT_ZERO_POINT
+    for (int oc = 0; oc < 4; ++oc) {
+        int32_t sum_w = 0;
+        const int8_t* w = g_block2_dw_weight + oc*9;
+        for (int k=0;k<9;++k) sum_w += (int32_t)w[k];
+        s_block2_dw_bias_adj[oc] = g_block2_dw_bias[oc] + (-(int32_t)MODEL_BLOCK1_OUT_ZERO_POINT) * sum_w;
+    }
+    // Block2 PW: OC=4, IC=4, in_zp = MODEL_BLOCK2_DW_OUT_ZERO_POINT
+    for (int oc = 0; oc < 4; ++oc) {
+        int32_t sum_w = 0;
+        const int8_t* w = g_block2_pw_weight + oc*4;
+        for (int ic=0; ic<4; ++ic) sum_w += (int32_t)w[ic];
+        s_block2_pw_bias_adj[oc] = g_block2_pw_bias[oc] + (-(int32_t)MODEL_BLOCK2_DW_OUT_ZERO_POINT) * sum_w;
+    }
+    // Head0 Linear: Out=8, In=6, in_zp = MODEL_CAT_OUT_ZERO_POINT
+    for (int oc = 0; oc < 8; ++oc) {
+        int32_t sum_w = 0;
+        const int8_t* w = g_head_0_weight + oc*6;
+        for (int ic=0; ic<6; ++ic) sum_w += (int32_t)w[ic];
+        s_head_0_bias_adj[oc] = g_head_0_bias[oc] + (-(int32_t)MODEL_CAT_OUT_ZERO_POINT) * sum_w;
+    }
+    // Head2 Linear: Out=2, In=8, in_zp = MODEL_HEAD0_OUT_ZERO_POINT
+    for (int oc = 0; oc < 2; ++oc) {
+        int32_t sum_w = 0;
+        const int8_t* w = g_head_2_weight + oc*8;
+        for (int ic=0; ic<8; ++ic) sum_w += (int32_t)w[ic];
+        s_head_2_bias_adj[oc] = g_head_2_bias[oc] + (-(int32_t)MODEL_HEAD0_OUT_ZERO_POINT) * sum_w;
+    }
+    s_bias_prepared = 1;
+}
+
 // Depthwise 3x3 specialization (S=1, P=1, G=C)
 static void layer_dwconv3x3_s8(
     act_type_t* restrict out,
@@ -186,8 +244,6 @@ static void layer_dwconv3x3_s8(
     if (H == 3 && W == 7) {
         for (int32_t c = 0; c < C; ++c) {
             const weight_type_t* w = weight + c * 9;
-            // Precompute sum_w per channel (fold input zero point)
-            acc_type_t sum_w = 0; for (int k = 0; k < 9; ++k) sum_w = saturate_add_s32(sum_w, (acc_type_t)w[k]);
             // Build padded buffer [5 x 9] with edge replication
             uint8_t pad[5*9];
             // Center copy
@@ -222,8 +278,7 @@ static void layer_dwconv3x3_s8(
                     acc = saturate_add_s32(acc, ((acc_type_t)pad[base +18] * (acc_type_t)w[6]));
                     acc = saturate_add_s32(acc, ((acc_type_t)pad[base +19] * (acc_type_t)w[7]));
                     acc = saturate_add_s32(acc, ((acc_type_t)pad[base +20] * (acc_type_t)w[8]));
-                    // Fold input zp and add bias
-                    acc = saturate_add_s32(acc, (acc_type_t)(-in_zp) * sum_w);
+                    // Add pre-folded bias
                     if (bias) { acc = saturate_add_s32(acc, bias[c]); }
                     int32_t mult = p->is_per_channel ? out_multiplier[c] : out_multiplier[0];
                     int32_t sh   = p->is_per_channel ? out_shift[c]      : out_shift[0];
@@ -266,8 +321,7 @@ static void layer_dwconv3x3_s8(
                 ih = base_h + 2; iw = base_w + 2;
                 if ((unsigned)ih < (unsigned)H && (unsigned)iw < (unsigned)W) { idx = get_index_nchw(ih, iw, c, H, W); acc = saturate_add_s32(acc, ((acc_type_t)in[idx] * (acc_type_t)w[8])); }
 
-                // Fold input zero-point and add bias
-                acc = saturate_add_s32(acc, (acc_type_t)(-in_zp) * sum_w);
+                // Add pre-folded bias
                 if (bias) { acc = saturate_add_s32(acc, bias[c]); }
                 int32_t mult = p->is_per_channel ? out_multiplier[c] : out_multiplier[0];
                 int32_t sh   = p->is_per_channel ? out_shift[c]      : out_shift[0];
@@ -302,10 +356,7 @@ static void layer_pointwise1x1_s8(
                     int32_t in_idx = get_index_nchw(oh, ow, ic, H, W);
                     acc = saturate_add_s32(acc, ((acc_type_t)in[in_idx] * (acc_type_t)w[ic]));
                 }
-                // Fold input zero-point: -in_zp * sum_w_per_oc
-                acc_type_t sum_w = 0;
-                for (int32_t ic = 0; ic < IC; ++ic) sum_w = saturate_add_s32(sum_w, (acc_type_t)w[ic]);
-                acc = saturate_add_s32(acc, (acc_type_t)(-in_zp) * sum_w);
+                // Add pre-folded bias
                 if (bias) { acc = saturate_add_s32(acc, bias[oc]); }
                 int32_t mult = p->is_per_channel ? out_multiplier[oc] : out_multiplier[0];
                 int32_t sh   = p->is_per_channel ? out_shift[oc]      : out_shift[0];
@@ -519,19 +570,13 @@ static void layer_linear_s8(
     for (int32_t out_c = 0; out_c < p->Out; ++out_c) {
         acc_type_t acc = 0; // Initialize accumulator for this output feature
 
-        // Loop over input features (MAC operation)
+        // Loop over input features (MAC operation), input zp already folded into bias
         for (int32_t in_c = 0; in_c < p->In; ++in_c) {
             // Get flat index for weight matrix
             int32_t w_idx = get_weight_index_linear(out_c, in_c, p->In);
 
-            // Perform MAC with zero point adjustments
-            acc_type_t in_val_u8 = in[in_c];
-            acc_type_t in_zp_val = (acc_type_t)p->in_zp;
-            acc_type_t weight_val_s8 = (acc_type_t)weight[w_idx];
-            acc_type_t term = (in_val_u8 - in_zp_val) * weight_val_s8;
-
-            // Accumulate using saturating addition
-            acc = saturate_add_s32(acc, term);
+            // Perform MAC without per-element subtraction (folded into bias)
+            acc = saturate_add_s32(acc, ((acc_type_t)in[in_c] * (acc_type_t)weight[w_idx]));
         } // End input feature loop
 
         // Add bias (scaled original bias) after MAC loops, using saturation
@@ -644,6 +689,9 @@ int model_forward_s8(
 ) {
     LOG_DEBUG("Starting Quantized Model Forward Pass...");
 
+    // Prepare adjusted biases once
+    prepare_folded_biases();
+
     // --- Arena Buffer Allocation ---
     // Define pointers into the arena for intermediate activation tensors.
     // Sizes are calculated based on layer output shapes.
@@ -680,26 +728,26 @@ int model_forward_s8(
 
     // --- Block 1 ---
     if (P_BLOCK1_DW.K == 3 && P_BLOCK1_DW.S == 1 && P_BLOCK1_DW.P == 1 && P_BLOCK1_DW.G == P_BLOCK1_DW.C) {
-        layer_dwconv3x3_s8(buf_block1_dw_out, x_q, g_block1_dw_weight, g_block1_dw_bias, &P_BLOCK1_DW, g_block1_dw_multiplier, g_block1_dw_shift);
+        layer_dwconv3x3_s8(buf_block1_dw_out, x_q, g_block1_dw_weight, s_block1_dw_bias_adj, &P_BLOCK1_DW, g_block1_dw_multiplier, g_block1_dw_shift);
     } else {
-        layer_conv2d_s8(buf_block1_dw_out, x_q, g_block1_dw_weight, g_block1_dw_bias, &P_BLOCK1_DW, g_block1_dw_multiplier, g_block1_dw_shift);
+        layer_conv2d_s8(buf_block1_dw_out, x_q, g_block1_dw_weight, s_block1_dw_bias_adj, &P_BLOCK1_DW, g_block1_dw_multiplier, g_block1_dw_shift);
     }
     if (P_BLOCK1_PW.K == 1 && P_BLOCK1_PW.S == 1 && P_BLOCK1_PW.P == 0 && P_BLOCK1_PW.G == 1) {
-        layer_pointwise1x1_s8(buf_block1_pw_out, buf_block1_dw_out, g_block1_pw_weight, g_block1_pw_bias, &P_BLOCK1_PW, g_block1_pw_multiplier, g_block1_pw_shift);
+        layer_pointwise1x1_s8(buf_block1_pw_out, buf_block1_dw_out, g_block1_pw_weight, s_block1_pw_bias_adj, &P_BLOCK1_PW, g_block1_pw_multiplier, g_block1_pw_shift);
     } else {
-        layer_conv2d_s8(buf_block1_pw_out, buf_block1_dw_out, g_block1_pw_weight, g_block1_pw_bias, &P_BLOCK1_PW, g_block1_pw_multiplier, g_block1_pw_shift);
+        layer_conv2d_s8(buf_block1_pw_out, buf_block1_dw_out, g_block1_pw_weight, s_block1_pw_bias_adj, &P_BLOCK1_PW, g_block1_pw_multiplier, g_block1_pw_shift);
     }
 
     // --- Block 2 ---
     if (P_BLOCK2_DW.K == 3 && P_BLOCK2_DW.S == 1 && P_BLOCK2_DW.P == 1 && P_BLOCK2_DW.G == P_BLOCK2_DW.C) {
-        layer_dwconv3x3_s8(buf_block2_dw_out, buf_block1_pw_out, g_block2_dw_weight, g_block2_dw_bias, &P_BLOCK2_DW, g_block2_dw_multiplier, g_block2_dw_shift);
+        layer_dwconv3x3_s8(buf_block2_dw_out, buf_block1_pw_out, g_block2_dw_weight, s_block2_dw_bias_adj, &P_BLOCK2_DW, g_block2_dw_multiplier, g_block2_dw_shift);
     } else {
-        layer_conv2d_s8(buf_block2_dw_out, buf_block1_pw_out, g_block2_dw_weight, g_block2_dw_bias, &P_BLOCK2_DW, g_block2_dw_multiplier, g_block2_dw_shift);
+        layer_conv2d_s8(buf_block2_dw_out, buf_block1_pw_out, g_block2_dw_weight, s_block2_dw_bias_adj, &P_BLOCK2_DW, g_block2_dw_multiplier, g_block2_dw_shift);
     }
     if (P_BLOCK2_PW.K == 1 && P_BLOCK2_PW.S == 1 && P_BLOCK2_PW.P == 0 && P_BLOCK2_PW.G == 1) {
-        layer_pointwise1x1_s8(buf_block2_pw_out, buf_block2_dw_out, g_block2_pw_weight, g_block2_pw_bias, &P_BLOCK2_PW, g_block2_pw_multiplier, g_block2_pw_shift);
+        layer_pointwise1x1_s8(buf_block2_pw_out, buf_block2_dw_out, g_block2_pw_weight, s_block2_pw_bias_adj, &P_BLOCK2_PW, g_block2_pw_multiplier, g_block2_pw_shift);
     } else {
-        layer_conv2d_s8(buf_block2_pw_out, buf_block2_dw_out, g_block2_pw_weight, g_block2_pw_bias, &P_BLOCK2_PW, g_block2_pw_multiplier, g_block2_pw_shift);
+        layer_conv2d_s8(buf_block2_pw_out, buf_block2_dw_out, g_block2_pw_weight, s_block2_pw_bias_adj, &P_BLOCK2_PW, g_block2_pw_multiplier, g_block2_pw_shift);
     }
 
     // --- Global Average Pooling ---
@@ -720,8 +768,8 @@ int model_forward_s8(
     layer_cat_s8(buf_cat_out, buf_gap_out, 4, meta_q, 2);
 
     // --- Head (Linear Layers) ---
-    layer_linear_s8(buf_head0_out, buf_cat_out, g_head_0_weight, g_head_0_bias, &P_HEAD_0, g_head_0_multiplier, g_head_0_shift);
-    layer_linear_s8(out_q, buf_head0_out, g_head_2_weight, g_head_2_bias, &P_HEAD_2, g_head_2_multiplier, g_head_2_shift);
+    layer_linear_s8(buf_head0_out, buf_cat_out, g_head_0_weight, s_head_0_bias_adj, &P_HEAD_0, g_head_0_multiplier, g_head_0_shift);
+    layer_linear_s8(out_q, buf_head0_out, g_head_2_weight, s_head_2_bias_adj, &P_HEAD_2, g_head_2_multiplier, g_head_2_shift);
 
     LOG_DEBUG("Quantized Model Forward Pass Completed.");
     return 0; // Success
