@@ -1,0 +1,36 @@
+[DBG_INFO] out=0 real_mult=0.002003926 qm=1101669901 shift=-8 bias_int=7
+[DBG] out=0 acc32=8251 acc_scaled=17 fp_ref_outq=23.269386
+[DBG_INFO] out=1 real_mult=0.002258024 qm=1241361675 shift=-8 bias_int=-5
+[DBG] out=1 acc32=-16906 acc_scaled=-38 fp_ref_outq=-43.606651
+[DBG_INFO] out=2 real_mult=0.002041435 qm=1122290759 shift=-8 bias_int=-16
+[DBG] out=2 acc32=-1940 acc_scaled=-4 fp_ref_outq=-19.708725
+[DBG_INFO] out=3 real_mult=0.002164387 qm=1189884549 shift=-8 bias_int=10
+[DBG] out=3 acc32=9484 acc_scaled=21 fp_ref_outq=30.832224
+[DBG_INFO] out=4 real_mult=0.000000225 qm=2030847651 shift=-22 bias_int=0
+[DBG] out=4 acc32=0 acc_scaled=0 fp_ref_outq=0.000000
+[DBG_INFO] out=5 real_mult=0.002189569 qm=1203728349 shift=-8 bias_int=-9
+[DBG] out=5 acc32=15156 acc_scaled=33 fp_ref_outq=24.666445
+[DBG_INFO] out=6 real_mult=0.002145521 qm=1179512391 shift=-8 bias_int=-6
+[DBG] out=6 acc32=-12329 acc_scaled=-26 fp_ref_outq=-32.075474
+[DBG_INFO] out=7 real_mult=0.002018259 qm=1109549732 shift=-8 bias_int=9
+[DBG] out=7 acc32=16494 acc_scaled=33 fp_ref_outq=42.103348
+[DBG_INFO2] out=0 real_mult=0.027971053 qm=1922156098 shift=-5 bias_int=58
+[DBG2] out=0 acc32=16753 acc_scaled=469 fp_ref_outq=526.697937
+[DBG_INFO2] out=1 real_mult=0.023890682 qm=1641755186 shift=-5 bias_int=126
+[DBG2] out=1 acc32=-5441 acc_scaled=-130 fp_ref_outq=-4.095346
+[DBG_INFO2] out=2 real_mult=0.023252514 qm=1597900571 shift=-5 bias_int=33
+[DBG2] out=2 acc32=-2348 acc_scaled=-55 fp_ref_outq=-21.823334
+[DBG_INFO2] out=3 real_mult=0.022958511 qm=1577696864 shift=-5 bias_int=37
+[DBG2] out=3 acc32=-13291 acc_scaled=-305 fp_ref_outq=-268.282898
+[DBG_INFO2] out=4 real_mult=0.016742333 qm=1150524384 shift=-5 bias_int=317
+[DBG2] out=4 acc32=-5096 acc_scaled=-85 fp_ref_outq=231.395004
+[DBG_INFO2] out=5 real_mult=0.018185658 qm=1249708928 shift=-5 bias_int=-202
+[DBG2] out=5 acc32=-3979 acc_scaled=-72 fp_ref_outq=-274.049194
+[DBG_INFO2] out=6 real_mult=0.024346339 qm=1673067709 shift=-5 bias_int=41
+[DBG2] out=6 acc32=48511 acc_scaled=1181 fp_ref_outq=1222.449097
+[DBG_INFO2] out=7 real_mult=0.017355544 qm=1192663889 shift=-5 bias_int=-107
+[DBG2] out=7 acc32=-18920 acc_scaled=-328 fp_ref_outq=-435.482819
+[DBG3] out=0 acc32=29925 acc_scaled=50 fp_ref_outq=-310.670898 qm=1853617792 shift=-9 bias_int=-361
+[DBG3] out=1 acc32=0 acc_scaled=0 fp_ref_outq=0.000000 qm=1794191872 shift=-20 bias_int=0
+[DBG_FINAL] layer3_q=[-128,52] deq=[-0.112843,0.000000] out=[-0.449467,0.000000]
+2.40077782,4.46326113

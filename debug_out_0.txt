@@ -1,0 +1,20 @@
+[DBG_INFO] out=0 mult_f=0.002003926 mult_fixed=4303398 bias_f=6.734994 bias_fixed=14463289344
+[DBG] out=0 acc32=8251 acc_fp(requant)=23.269386 fp_ref=23.269386
+[DBG_INFO] out=1 mult_f=0.002258024 mult_fixed=4849069 bias_f=-5.432496 bias_fixed=-11666196480
+[DBG] out=1 acc32=-16906 acc_fp(requant)=-43.606644 fp_ref=-43.606651
+[DBG_INFO] out=2 mult_f=0.002041435 mult_fixed=4383949 bias_f=-15.748348 bias_fixed=-33819320320
+[DBG] out=2 acc32=-1940 acc_fp(requant)=-19.708733 fp_ref=-19.708725
+[DBG_INFO] out=3 mult_f=0.002164387 mult_fixed=4647987 bias_f=10.305168 bias_fixed=22130180096
+[DBG] out=3 acc32=9484 acc_fp(requant)=30.832220 fp_ref=30.832224
+[DBG_INFO] out=4 mult_f=0.000000225 mult_fixed=484 bias_f=-0.000000 bias_fixed=0
+[DBG] out=4 acc32=0 acc_fp(requant)=0.000000 fp_ref=0.000000
+[DBG_INFO] out=5 mult_f=0.002189569 mult_fixed=4702064 bias_f=-8.518663 bias_fixed=-18293690368
+[DBG] out=5 acc32=15156 acc_fp(requant)=24.666449 fp_ref=24.666445
+[DBG_INFO] out=6 mult_f=0.002145521 mult_fixed=4607471 bias_f=-5.623352 bias_fixed=-12076055552
+[DBG] out=6 acc32=-12329 acc_fp(requant)=-32.075478 fp_ref=-32.075474
+[DBG_INFO] out=7 mult_f=0.002018259 mult_fixed=4334179 bias_f=8.814187 bias_fixed=18928322560
+[DBG] out=7 acc32=16494 acc_fp(requant)=42.103355 fp_ref=42.103348
+[DBG3] out=0 acc32=30560 acc_fp(requant)=-309.600375 fp_ref=-309.600372
+[DBG3] out=1 acc32=0 acc_fp(requant)=0.000000 fp_ref=0.000000
+[DBG_FINAL] layer3_q=[-128,52] deq=[-0.112843,0.000000] out=[-0.449467,0.000000]
+2.40077782,4.46326113

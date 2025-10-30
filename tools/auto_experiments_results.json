@@ -1,0 +1,562 @@
+[
+  {
+    "label": "BANKERS=0 BIAS_TEE=0 TEE=0",
+    "status": "ok",
+    "py_dump": "intermediates_aligned_g26.json_id0_py.json",
+    "c_dump": "inter_aligned_g26_id0_c_int.json",
+    "diffs": {
+      "net_0_q_int": [
+        {
+          "idx": 3,
+          "py": 12,
+          "c": 11
+        },
+        {
+          "idx": 7,
+          "py": 30,
+          "c": 29
+        },
+        {
+          "idx": 10,
+          "py": 9,
+          "c": 8
+        },
+        {
+          "idx": 12,
+          "py": 10,
+          "c": 9
+        },
+        {
+          "idx": 14,
+          "py": 44,
+          "c": 45
+        },
+        {
+          "idx": 26,
+          "py": 66,
+          "c": 67
+        },
+        {
+          "idx": 30,
+          "py": 7,
+          "c": 6
+        }
+      ],
+      "net_2_q_int": [
+        {
+          "idx": 2,
+          "py": 5,
+          "c": 4
+        },
+        {
+          "idx": 4,
+          "py": 18,
+          "c": 17
+        },
+        {
+          "idx": 12,
+          "py": 72,
+          "c": 71
+        }
+      ],
+      "net_4_q_int": [
+        {
+          "idx": 0,
+          "py": 90,
+          "c": 84
+        }
+      ]
+    },
+    "total": 11
+  },
+  {
+    "label": "BANKERS=0 BIAS_TEE=0 TEE=1",
+    "status": "ok",
+    "py_dump": "intermediates_aligned_g26.json_id0_py.json",
+    "c_dump": "inter_aligned_g26_id0_c_int.json",
+    "diffs": {
+      "net_0_q_int": [
+        {
+          "idx": 3,
+          "py": 12,
+          "c": 11
+        },
+        {
+          "idx": 7,
+          "py": 30,
+          "c": 29
+        },
+        {
+          "idx": 10,
+          "py": 9,
+          "c": 8
+        },
+        {
+          "idx": 12,
+          "py": 10,
+          "c": 9
+        },
+        {
+          "idx": 14,
+          "py": 44,
+          "c": 45
+        },
+        {
+          "idx": 26,
+          "py": 66,
+          "c": 67
+        },
+        {
+          "idx": 30,
+          "py": 7,
+          "c": 6
+        }
+      ],
+      "net_2_q_int": [
+        {
+          "idx": 2,
+          "py": 5,
+          "c": 4
+        },
+        {
+          "idx": 4,
+          "py": 18,
+          "c": 17
+        },
+        {
+          "idx": 12,
+          "py": 72,
+          "c": 71
+        }
+      ],
+      "net_4_q_int": [
+        {
+          "idx": 0,
+          "py": 90,
+          "c": 84
+        }
+      ]
+    },
+    "total": 11
+  },
+  {
+    "label": "BANKERS=0 BIAS_TEE=1 TEE=0",
+    "status": "ok",
+    "py_dump": "intermediates_aligned_g26.json_id0_py.json",
+    "c_dump": "inter_aligned_g26_id0_c_int.json",
+    "diffs": {
+      "net_0_q_int": [
+        {
+          "idx": 3,
+          "py": 12,
+          "c": 11
+        },
+        {
+          "idx": 7,
+          "py": 30,
+          "c": 29
+        },
+        {
+          "idx": 10,
+          "py": 9,
+          "c": 8
+        },
+        {
+          "idx": 12,
+          "py": 10,
+          "c": 9
+        },
+        {
+          "idx": 14,
+          "py": 44,
+          "c": 45
+        },
+        {
+          "idx": 26,
+          "py": 66,
+          "c": 67
+        },
+        {
+          "idx": 30,
+          "py": 7,
+          "c": 6
+        }
+      ],
+      "net_2_q_int": [
+        {
+          "idx": 2,
+          "py": 5,
+          "c": 4
+        },
+        {
+          "idx": 4,
+          "py": 18,
+          "c": 17
+        },
+        {
+          "idx": 12,
+          "py": 72,
+          "c": 71
+        }
+      ],
+      "net_4_q_int": [
+        {
+          "idx": 0,
+          "py": 90,
+          "c": 84
+        }
+      ]
+    },
+    "total": 11
+  },
+  {
+    "label": "BANKERS=0 BIAS_TEE=1 TEE=1",
+    "status": "ok",
+    "py_dump": "intermediates_aligned_g26.json_id0_py.json",
+    "c_dump": "inter_aligned_g26_id0_c_int.json",
+    "diffs": {
+      "net_0_q_int": [
+        {
+          "idx": 3,
+          "py": 12,
+          "c": 11
+        },
+        {
+          "idx": 7,
+          "py": 30,
+          "c": 29
+        },
+        {
+          "idx": 10,
+          "py": 9,
+          "c": 8
+        },
+        {
+          "idx": 12,
+          "py": 10,
+          "c": 9
+        },
+        {
+          "idx": 14,
+          "py": 44,
+          "c": 45
+        },
+        {
+          "idx": 26,
+          "py": 66,
+          "c": 67
+        },
+        {
+          "idx": 30,
+          "py": 7,
+          "c": 6
+        }
+      ],
+      "net_2_q_int": [
+        {
+          "idx": 2,
+          "py": 5,
+          "c": 4
+        },
+        {
+          "idx": 4,
+          "py": 18,
+          "c": 17
+        },
+        {
+          "idx": 12,
+          "py": 72,
+          "c": 71
+        }
+      ],
+      "net_4_q_int": [
+        {
+          "idx": 0,
+          "py": 90,
+          "c": 84
+        }
+      ]
+    },
+    "total": 11
+  },
+  {
+    "label": "BANKERS=1 BIAS_TEE=0 TEE=0",
+    "status": "ok",
+    "py_dump": "intermediates_aligned_g26.json_id0_py.json",
+    "c_dump": "inter_aligned_g26_id0_c_int.json",
+    "diffs": {
+      "net_0_q_int": [
+        {
+          "idx": 3,
+          "py": 12,
+          "c": 11
+        },
+        {
+          "idx": 7,
+          "py": 30,
+          "c": 29
+        },
+        {
+          "idx": 10,
+          "py": 9,
+          "c": 8
+        },
+        {
+          "idx": 12,
+          "py": 10,
+          "c": 9
+        },
+        {
+          "idx": 14,
+          "py": 44,
+          "c": 45
+        },
+        {
+          "idx": 26,
+          "py": 66,
+          "c": 67
+        },
+        {
+          "idx": 30,
+          "py": 7,
+          "c": 6
+        }
+      ],
+      "net_2_q_int": [
+        {
+          "idx": 2,
+          "py": 5,
+          "c": 4
+        },
+        {
+          "idx": 4,
+          "py": 18,
+          "c": 17
+        },
+        {
+          "idx": 12,
+          "py": 72,
+          "c": 71
+        }
+      ],
+      "net_4_q_int": [
+        {
+          "idx": 0,
+          "py": 90,
+          "c": 84
+        }
+      ]
+    },
+    "total": 11
+  },
+  {
+    "label": "BANKERS=1 BIAS_TEE=0 TEE=1",
+    "status": "ok",
+    "py_dump": "intermediates_aligned_g26.json_id0_py.json",
+    "c_dump": "inter_aligned_g26_id0_c_int.json",
+    "diffs": {
+      "net_0_q_int": [
+        {
+          "idx": 3,
+          "py": 12,
+          "c": 11
+        },
+        {
+          "idx": 7,
+          "py": 30,
+          "c": 29
+        },
+        {
+          "idx": 10,
+          "py": 9,
+          "c": 8
+        },
+        {
+          "idx": 12,
+          "py": 10,
+          "c": 9
+        },
+        {
+          "idx": 14,
+          "py": 44,
+          "c": 45
+        },
+        {
+          "idx": 26,
+          "py": 66,
+          "c": 67
+        },
+        {
+          "idx": 30,
+          "py": 7,
+          "c": 6
+        }
+      ],
+      "net_2_q_int": [
+        {
+          "idx": 2,
+          "py": 5,
+          "c": 4
+        },
+        {
+          "idx": 4,
+          "py": 18,
+          "c": 17
+        },
+        {
+          "idx": 12,
+          "py": 72,
+          "c": 71
+        }
+      ],
+      "net_4_q_int": [
+        {
+          "idx": 0,
+          "py": 90,
+          "c": 84
+        }
+      ]
+    },
+    "total": 11
+  },
+  {
+    "label": "BANKERS=1 BIAS_TEE=1 TEE=0",
+    "status": "ok",
+    "py_dump": "intermediates_aligned_g26.json_id0_py.json",
+    "c_dump": "inter_aligned_g26_id0_c_int.json",
+    "diffs": {
+      "net_0_q_int": [
+        {
+          "idx": 3,
+          "py": 12,
+          "c": 11
+        },
+        {
+          "idx": 7,
+          "py": 30,
+          "c": 29
+        },
+        {
+          "idx": 10,
+          "py": 9,
+          "c": 8
+        },
+        {
+          "idx": 12,
+          "py": 10,
+          "c": 9
+        },
+        {
+          "idx": 14,
+          "py": 44,
+          "c": 45
+        },
+        {
+          "idx": 26,
+          "py": 66,
+          "c": 67
+        },
+        {
+          "idx": 30,
+          "py": 7,
+          "c": 6
+        }
+      ],
+      "net_2_q_int": [
+        {
+          "idx": 2,
+          "py": 5,
+          "c": 4
+        },
+        {
+          "idx": 4,
+          "py": 18,
+          "c": 17
+        },
+        {
+          "idx": 12,
+          "py": 72,
+          "c": 71
+        }
+      ],
+      "net_4_q_int": [
+        {
+          "idx": 0,
+          "py": 90,
+          "c": 84
+        }
+      ]
+    },
+    "total": 11
+  },
+  {
+    "label": "BANKERS=1 BIAS_TEE=1 TEE=1",
+    "status": "ok",
+    "py_dump": "intermediates_aligned_g26.json_id0_py.json",
+    "c_dump": "inter_aligned_g26_id0_c_int.json",
+    "diffs": {
+      "net_0_q_int": [
+        {
+          "idx": 3,
+          "py": 12,
+          "c": 11
+        },
+        {
+          "idx": 7,
+          "py": 30,
+          "c": 29
+        },
+        {
+          "idx": 10,
+          "py": 9,
+          "c": 8
+        },
+        {
+          "idx": 12,
+          "py": 10,
+          "c": 9
+        },
+        {
+          "idx": 14,
+          "py": 44,
+          "c": 45
+        },
+        {
+          "idx": 26,
+          "py": 66,
+          "c": 67
+        },
+        {
+          "idx": 30,
+          "py": 7,
+          "c": 6
+        }
+      ],
+      "net_2_q_int": [
+        {
+          "idx": 2,
+          "py": 5,
+          "c": 4
+        },
+        {
+          "idx": 4,
+          "py": 18,
+          "c": 17
+        },
+        {
+          "idx": 12,
+          "py": 72,
+          "c": 71
+        }
+      ],
+      "net_4_q_int": [
+        {
+          "idx": 0,
+          "py": 90,
+          "c": 84
+        }
+      ]
+    },
+    "total": 11
+  }
+]
