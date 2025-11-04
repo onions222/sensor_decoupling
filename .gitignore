@@ -31,6 +31,7 @@ ENV/
 htmlcov/
 .tox/
 infer/intermediates/
+training_data/
 
 # C/C++ build artifacts
 *.o
