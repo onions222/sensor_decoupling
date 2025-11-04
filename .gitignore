@@ -1,0 +1,86 @@
+# OS / Editor
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+.history/
+*.swp
+*.swo
+
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+.ipynb_checkpoints/
+.pytest_cache/
+.mypy_cache/
+.pytype/
+.pyre/
+.cache/
+dist/
+build/
+*.egg-info/
+.eggs/
+.venv/
+venv/
+env/
+ENV/
+.coverage
+.coverage.*
+htmlcov/
+.tox/
+infer/intermediates/
+
+# C/C++ build artifacts
+*.o
+*.obj
+*.a
+*.lib
+*.dll
+*.dylib
+*.exe
+*.out
+*.app
+
+# clang/clangd caches
+.ccls-cache/
+.cache/
+.clangd/
+
+# Logs & temp
+*.log
+*.tmp
+*.bak
+*.old
+
+# Project-specific (infer/ generated binaries & debug)
+infer/inference_app
+infer/inference_app_debug
+infer/bench_app*
+infer/runner_*
+infer/opcount_calc
+infer/gprof_summary.txt
+gmon.out
+infer/debug_out_*.txt
+infer/debug_out_fp_*.txt
+infer/debug_out_qm_*.txt
+
+# Project-specific intermediates/results
+infer/intermediates/*.json
+infer/inter_int_c.json
+infer/tools/auto_experiments_results.json
+
+# Large model artifacts (uncomment if you do NOT want to version models)
+# runs_*/
+# **/*.pt
+# **/*.pth
+# **/*.onnx
+
+# Archives
+*.zip
+*.tar
+*.tar.gz
+*.tgz
+*.rar
+
