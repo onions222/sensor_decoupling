@@ -442,7 +442,7 @@ def infer_and_plot_per_file(model, loader, device, out_dir: Path, alpha_y=ALPHA_
                      'g-', linewidth=0.3, alpha=0.3)
 
         plt.title(f"Global Summary: All {len(gt_all)} Validation Points")
-        plt.xlabel("x (*64+32)"); plt.ylabel("y (*64+32)")
+        plt.xlabel("x"); plt.ylabel("y")
         plt.legend(loc='best', frameon=True)
         plt.grid(True, linestyle=':', alpha=0.5)
         plt.tight_layout()
