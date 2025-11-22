@@ -229,107 +229,124 @@ def fuse_student_modules(model: StudentModel):
 
 def export_onnx(model_original, args):
     """
-    导出带有 FakeQuantize 节点的 ONNX 模型。
-    使用 Deep Copy 以避免干扰原有训练过程。
+    导出带有 FakeQuantize 节点的 ONNX 模型 (QDQ 格式)。
+    修复方案 V4 (终极版): 使用物理替换法 (Hard Replacement)。
+    将所有的 FakeQuantize 模块替换为自定义的静态 Wrapper，
+    彻底杜绝 'fused_moving_avg' 算子出现的可能性。
     """
-    print(">>> 正在准备导出 QAT ONNX 模型 (带 FakeQuantize 节点)...")
+    print(">>> 正在准备导出 QAT ONNX 模型 (使用静态算子替换法)...")
     
-    # 1. 创建深拷贝，完全隔离训练状态
-    #    注意：需要先将原模型转到 cpu 再 copy 比较稳妥，或者直接 deepcopy 后 to cpu
-    #    为了不影响正在 GPU 上训练的模型，我们先复制
+    # ---------------------------------------------------------
+    # 内部类：自定义的静态 QDQ 包装器
+    # ---------------------------------------------------------
+    class QDQExportWrapper(nn.Module):
+        def __init__(self, fq_module):
+            super().__init__()
+            # 1. 复制量化边界
+            self.quant_min = fq_module.quant_min
+            self.quant_max = fq_module.quant_max
+            
+            # 2. 复制并注册 Scale 和 ZeroPoint
+            # 注意：必须 detach() 以断开与原图的梯度联系
+            self.register_buffer('scale', fq_module.scale.detach().clone())
+            self.register_buffer('zero_point', fq_module.zero_point.detach().clone())
+            
+            # 3. 识别 Per-Channel 还是 Per-Tensor
+            # qnnpack 通常权重是 Per-Channel，激活是 Per-Tensor
+            self.ch_axis = getattr(fq_module, 'ch_axis', -1)
+            
+            # 4. 检查开关状态
+            # 如果 fake_quant 被禁用，我们应当直接返回输入
+            self.enabled = True
+            if hasattr(fq_module, 'fake_quant_enabled'):
+                if fq_module.fake_quant_enabled.item() == 0:
+                    self.enabled = False
+
+        def forward(self, X):
+            # 如果未启用，直接透传 (相当于 Identity)
+            if not self.enabled:
+                return X
+                
+            # 显式调用静态伪量化算子
+            # 这些算子会被 ONNX 导出器识别为 QuantizeLinear + DequantizeLinear
+            if self.ch_axis != -1:
+                return torch.fake_quantize_per_channel_affine(
+                    X, self.scale, self.zero_point, 
+                    self.ch_axis, self.quant_min, self.quant_max
+                )
+            else:
+                return torch.fake_quantize_per_tensor_affine(
+                    X, self.scale, self.zero_point, 
+                    self.quant_min, self.quant_max
+                )
+
+    # ---------------------------------------------------------
+    # 辅助函数：递归替换模块
+    # ---------------------------------------------------------
+    def replace_fq_with_static(module):
+        for name, child in module.named_children():
+            if isinstance(child, tq.FakeQuantize):
+                # 发现 FakeQuantize，执行替换
+                print(f"  [替换] replacing {name} with static QDQ node...")
+                static_fq = QDQExportWrapper(child)
+                setattr(module, name, static_fq)
+            else:
+                # 递归搜索
+                replace_fq_with_static(child)
+
+    # ---------------------------------------------------------
+    # 1. 创建模型副本 (Deep Copy)
+    # ---------------------------------------------------------
+    model_original.cpu()
     try:
         model_export = copy.deepcopy(model_original)
     except Exception as e:
-        print(f"Warning: Deepcopy failed ({e}), creating new instance and loading state dict.")
-        # Fallback: Re-create structure and load state
+        print(f"Warning: Deepcopy failed ({e}), creating new instance.")
+        # Fallback 重建逻辑
         if args.student_channels:
             chs = [int(x) for x in args.student_channels.split(',') if x.strip()]
             model_export = make_student_model(channels=chs)
         else:
             mult = float(args.student_mult) if args.student_mult is not None else None
             model_export = make_student_model(multiplier=mult)
-        # Re-fuse and Re-prepare to match structure
         fuse_student_modules(model_export)
         model_export.qconfig = tq.get_default_qat_qconfig('qnnpack')
         tq.prepare_qat(model_export, inplace=True)
-        # Load weights
         model_export.load_state_dict(model_original.state_dict())
+    
+    # 恢复原模型到 GPU，避免影响后续训练
+    model_original.to(device)
 
+    # ---------------------------------------------------------
+    # 2. 执行“手术”：物理替换所有 FakeQuantize
+    # ---------------------------------------------------------
     model_export.to('cpu')
     model_export.eval()
-
-    # 2. 关键：使用官方 API 递归禁用 Observer
-    #    这会将所有 FakeQuantize 模块切换为 inference 模式 (使用已统计的 scale/zp)
-    model_export.apply(tq.disable_observer)
     
-    #    同时确保 fake_quant 是开启的 (我们需要 QDQ 节点)
-    model_export.apply(tq.enable_fake_quant)
+    print(">>> 开始替换 FakeQuantize 模块...")
+    replace_fq_with_static(model_export)
+    print(">>> 替换完成。所有统计更新算子已被移除。")
 
-    # 3. 构造输入
+    # ---------------------------------------------------------
+    # 3. 导出 ONNX
+    # ---------------------------------------------------------
     dummy_input_patch = torch.randn(1, 1, 3, 5)
     dummy_input_odd = torch.tensor([1.0])
-
-    # 4. 运行一次前向传播以刷新图状态
-    #    这有助于消除动态统计图节点，固定为静态量化节点
+    
+    # 刷新一次 (虽然对于静态模块不是必须的，但保险起见)
     with torch.no_grad():
         model_export(dummy_input_patch, dummy_input_odd)
 
     onnx_path = os.path.join(args.out_dir, 'student_qat.onnx')
     
-    # 确保输出目录存在
-    os.makedirs(args.out_dir, exist_ok=True)
-    
-    # 定义替换FakeQuantize模块的函数
-    def replace_fake_quant_with_identity(module):
-        """
-        将模型中的FakeQuantize模块替换为恒等映射，以允许ONNX导出
-        """
-        for name, child in module.named_children():
-            if isinstance(child, torch.quantization.FakeQuantize):
-                print(f"Replacing FakeQuantize module: {name}")
-                # 将FakeQuantize模块替换为恒等映射
-                setattr(module, name, torch.nn.Identity())
-            else:
-                replace_fake_quant_with_identity(child)
-    
-    # 定义移除QuantStub和DeQuantStub的函数
-    def remove_quant_stubs(module):
-        """
-        移除模型中的QuantStub和DeQuantStub模块
-        """
-        for name, child in module.named_children():
-            if isinstance(child, (torch.quantization.QuantStub, torch.quantization.DeQuantStub)):
-                print(f"Removing Quant/DeQuant Stub: {name}")
-                # 将QuantStub/DeQuantStub替换为恒等映射
-                setattr(module, name, torch.nn.Identity())
-            else:
-                remove_quant_stubs(child)
-    
-    # 替换FakeQuantize模块后导出（已验证成功的方法）
-    print("使用方法1: 替换FakeQuantize模块后导出")
     try:
-        # 创建新的模型副本
-        model_export_simple = copy.deepcopy(model_original)
-        model_export_simple.to('cpu')
-        model_export_simple.eval()
-        
-        # 禁用observer和启用fake_quant（确保模型处于推理模式）
-        model_export_simple.apply(tq.disable_observer)
-        model_export_simple.apply(tq.enable_fake_quant)
-        
-        # 替换FakeQuantize模块
-        replace_fake_quant_with_identity(model_export_simple)
-        
-        # 移除QuantStub和DeQuantStub
-        remove_quant_stubs(model_export_simple)
-        
-        # 导出ONNX模型
+        print(f">>> 开始导出 ONNX: {onnx_path}")
         torch.onnx.export(
-            model_export_simple,
+            model_export,
             (dummy_input_patch, dummy_input_odd),
             onnx_path,
             verbose=False,
-            opset_version=13,
+            opset_version=13,  # 必须 >= 13
             input_names=['input_patch', 'input_is_odd'],
             output_names=['output'],
             do_constant_folding=True,
@@ -341,12 +358,15 @@ def export_onnx(model_original, args):
                 'output': {0: 'batch_size'}
             }
         )
-        print(f">>> ONNX 导出成功！")
-        del model_export_simple
+        print(f">>> ONNX 导出成功！(已包含静态 QDQ 节点)")
         return True
     except Exception as e:
         print(f"!!! ONNX 导出失败: {e}")
+        import traceback
+        traceback.print_exc()
         return False
+    finally:
+        del model_export
 
 def train_qat(args):
     # 再次设置引擎
