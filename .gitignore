@@ -30,7 +30,6 @@ ENV/
 .coverage.*
 htmlcov/
 .tox/
-infer/intermediates/
 traing_data/
 figs_val/
 
@@ -58,23 +57,10 @@ figs_val/
 *.old
 
 # Project-specific (infer/ generated binaries & debug)
-infer/inference_app
-infer/inference_app_debug
-infer/bench_app*
-infer/runner_*
-infer/opcount_calc
-infer/gprof_summary.txt
-gmon.out
-infer/debug_out_*.txt
-infer/debug_out_fp_*.txt
-infer/debug_out_qm_*.txt
 .png
 archive/
 
-# Project-specific intermediates/results
-infer/intermediates/*.json
-infer/inter_int_c.json
-infer/tools/auto_experiments_results.json
+
 
 # Large model artifacts (uncomment if you do NOT want to version models)
 # runs_*/
