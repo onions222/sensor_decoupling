@@ -1,0 +1,13 @@
+{
+  "data_dir": "/work/hwc/SPARSE/training_data/aligned_data_for_training_int",
+  "teacher_path": "/work/hwc/SPARSE/distill/decoupler_model_v16_teacher_best.pth",
+  "init_student": "/work/hwc/SPARSE/distill/pths/decoupler_model_v16_student_best.pth",
+  "out_dir": "/work/hwc/SPARSE/distill/qat_student_runs",
+  "epochs": 60,
+  "batch_size": 64,
+  "lr": 0.001,
+  "student_channels": null,
+  "student_mult": null,
+  "distill_coord": false,
+  "alpha": 0.3
+}

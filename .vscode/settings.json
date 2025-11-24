@@ -1,5 +1,6 @@
 {
     "files.associations": {
         "cJSON.C": "cpp"
-    }
+    },
+    "cmake.sourceDirectory": "/work/hwc/SPARSE/TinyMaix"
 }
