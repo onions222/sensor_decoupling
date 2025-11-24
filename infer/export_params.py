@@ -38,24 +38,22 @@ def get_multiplier_shift(real_multiplier):
     """
     if real_multiplier == 0.:
         return 0, 0
-    
-    # 获取底数和指数: x = sig * 2^exp, sig in [0.5, 1)
+    # 使用 frexp 表示: real_multiplier = sig * 2^exp, sig in [0.5, 1)
+    # 然后量化为 Q31: quantized_multiplier = round(sig * 2^31)
+    # 为了使最终的缩放与 multiply_by_quantized_multiplier 中的实现对应，
+    # 我们需要满足: real_multiplier == quantized_multiplier / 2^(31 + shift)
+    # 代入 sig*2^exp 得到 shift = -exp
     sig, exp = math.frexp(real_multiplier)
-    
-    # 将小数部分放大为 int32 (Q31 格式)
-    # 我们希望 multiplier 是一个较大的整数，以便保持精度
+
     q_mult = int(round(sig * (1 << 31)))
-    
-    # 计算右移位数
-    # real = q_mult * 2^-31 * 2^exp
-    # 我们需要 real = q_mult * 2^-shift
-    # 所以 -shift = -31 + exp  => shift = 31 - exp
-    shift = 31 - exp
-    
-    if shift < 0:
-        print(f"Warning: Shift {shift} is negative, multiplier might be too large.")
-        shift = 0
-        
+    # 处理边界情况: 如果 q_mult 恰好等于 2^31，则右移一位并增加指数
+    if q_mult == (1 << 31):
+        q_mult >>= 1
+        exp += 1
+
+    # 根据推导，shift = -exp（shift 可以为负，表示后续会做左移）
+    shift = -exp
+
     return q_mult, shift
 
 def extract_layer_params(name, layer, input_scale, input_zp):

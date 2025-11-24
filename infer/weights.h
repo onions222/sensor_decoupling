@@ -4,7 +4,8 @@
 
 #include <stdint.h>
 
-#// Layer: L0 (Shape: 2x1x3x3)
+// Extern declarations for layer arrays (definitions are in weights.c)
+// Layer: L0 (Shape: 2x1x3x3)
 extern const int8_t L0_WEIGHTS[];
 extern const int32_t L0_BIAS[];
 
@@ -14,10 +15,10 @@ extern const int32_t L0_BIAS[];
 #define L0_K_W 3
 #define L0_PAD 1
 #define L0_MULT 1193190145
-#define L0_SHIFT 37
+#define L0_SHIFT 6
 #define L0_OUT_ZP 0
 #define L0_OUT_SCALE 0.001840049f
-// ----------------------------------------
+
 // Layer: L1 (Shape: 4x2x3x3)
 extern const int8_t L1_WEIGHTS[];
 extern const int32_t L1_BIAS[];
@@ -28,10 +29,10 @@ extern const int32_t L1_BIAS[];
 #define L1_K_W 3
 #define L1_PAD 1
 #define L1_MULT 2010195705
-#define L1_SHIFT 40
+#define L1_SHIFT 9
 #define L1_OUT_ZP 0
 #define L1_OUT_SCALE 0.003848094f
-// ----------------------------------------
+
 // Layer: L2 (Shape: 2x4x3x3)
 extern const int8_t L2_WEIGHTS[];
 extern const int32_t L2_BIAS[];
@@ -42,10 +43,10 @@ extern const int32_t L2_BIAS[];
 #define L2_K_W 3
 #define L2_PAD 1
 #define L2_MULT 1784145031
-#define L2_SHIFT 40
+#define L2_SHIFT 9
 #define L2_OUT_ZP 0
 #define L2_OUT_SCALE 0.007632209f
-// ----------------------------------------
+
 // Layer: L3 (Shape: 1x2x1x1)
 extern const int8_t L3_WEIGHTS[];
 extern const int32_t L3_BIAS[];
@@ -56,8 +57,8 @@ extern const int32_t L3_BIAS[];
 #define L3_K_W 1
 #define L3_PAD 0
 #define L3_MULT 1209633662
-#define L3_SHIFT 38
+#define L3_SHIFT 7
 #define L3_OUT_ZP 124
 #define L3_OUT_SCALE 0.008108832f
-// ----------------------------------------
+
 #endif // WEIGHTS_H

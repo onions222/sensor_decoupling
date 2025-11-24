@@ -1,4 +1,5 @@
 #include "inference.h"
+#include <math.h>
 
 // ================= 内存池定义 =================
 // 根据模型结构预分配静态内存
@@ -111,6 +112,77 @@ int main() {
         }
         printf("\n");
     }
+
+    // ------------ Compute global centroid following V16 notebook mapping ------------
+    // Local CoM on 3x5 patch (x: 0..4, y: 0..2), using clamp_min(0) semantics
+    double local[3][5];
+    double eps = 1e-8;
+    double mass = 0.0;
+    for (int y = 0; y < 3; y++) {
+        for (int x = 0; x < 5; x++) {
+            int idx = y * 5 + x;
+            int8_t q_val = t_out.data[idx];
+            double v = dequantize_output(q_val, L3_OUT_SCALE, L3_OUT_ZP);
+            if (v < 0.0) v = 0.0; // clamp_min(0)
+            local[y][x] = v;
+            mass += v;
+        }
+    }
+    double cx_local = 0.0, cy_local = 0.0;
+    if (mass < eps) {
+        // fallback: use abs as weights (if all-zero or negative)
+        double abs_mass = 0.0;
+        for (int y = 0; y < 3; y++) for (int x = 0; x < 5; x++) {
+            double v = fabs(dequantize_output(t_out.data[y*5 + x], L3_OUT_SCALE, L3_OUT_ZP));
+            local[y][x] = v;
+            abs_mass += v;
+        }
+        if (abs_mass < eps) {
+            printf("Centroid: undefined (zero mass)\n");
+            return 0;
+        }
+        mass = abs_mass;
+    }
+    double sum_xw = 0.0, sum_yw = 0.0;
+    for (int y = 0; y < 3; y++) {
+        for (int x = 0; x < 5; x++) {
+            double w = local[y][x];
+            sum_xw += x * w;
+            sum_yw += y * w;
+        }
+    }
+    cx_local = sum_xw / mass;
+    cy_local = sum_yw / mass;
+
+    // Map to global coordinates per V16 CoM_from_Patch_V12
+    // pw_offset = patch_w // 2 = 5//2 = 2 ; ph_offset = 3//2 = 1
+    const int pw_offset = 2;
+    const int ph_offset = 1;
+
+    // read compile-time macros written into input_sample.h by the validation script
+    int peak_r_m = PEAK_R_M;
+    int peak_c_m_10 = PEAK_C_M_10;
+    int is_odd_flag = INPUT_IS_ODD;
+
+    double global_x_10 = cx_local + (double)peak_c_m_10 - (double)pw_offset;
+    double global_y = cy_local + (double)peak_r_m - (double)ph_offset;
+
+    // clamp and interpolate using parity grids
+    double x_clamped = global_x_10;
+    if (x_clamped < 0.0) x_clamped = 0.0;
+    if (x_clamped > 9.0) x_clamped = 9.0;
+    int x_floor = (int)floor(x_clamped);
+    int x_ceil = (int)ceil(x_clamped);
+    double frac = x_clamped - (double)x_floor;
+
+    static const double odd_grid_10[10] = {0.5, 2.5, 4.5, 6.5, 8.0, 9.0, 10.5, 12.5, 14.5, 16.5};
+    static const double even_grid_10[10] = {0.0, 1.5, 3.5, 5.5, 7.5, 9.5, 11.5, 13.5, 15.5, 17.0};
+    const double* grid = (is_odd_flag ? odd_grid_10 : even_grid_10);
+    double val_floor = grid[x_floor];
+    double val_ceil = grid[x_ceil];
+    double global_x_18 = val_floor + (val_ceil - val_floor) * frac;
+
+    printf("Centroid global (x18, y32): %6.3f, %6.3f\n", global_x_18, global_y);
 
     return 0;
 }
