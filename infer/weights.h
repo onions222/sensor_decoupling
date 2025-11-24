@@ -4,61 +4,81 @@
 
 #include <stdint.h>
 
-// Extern declarations for layer arrays (definitions are in weights.c)
 // Layer: L0 (Shape: 2x1x3x3)
-extern const int8_t L0_WEIGHTS[];
-extern const int32_t L0_BIAS[];
+const int8_t L0_WEIGHTS[] = {
+    -56, 56, -113, 108, -52, 123, -124, 110, 52, -40, 115, -3, 124, -73, 127, 11, 
+    63, -117, 
+};
+
+const int32_t L0_BIAS[] = { 0, 0 };
 
 #define L0_IN_CH 1
 #define L0_OUT_CH 2
 #define L0_K_H 3
 #define L0_K_W 3
 #define L0_PAD 1
-#define L0_MULT 1193190145
+#define L0_MULT 1725159793
 #define L0_SHIFT 6
 #define L0_OUT_ZP 0
-#define L0_OUT_SCALE 0.001840049f
-
+#define L0_OUT_SCALE 0.000688240f
+----------------------------------------
 // Layer: L1 (Shape: 4x2x3x3)
-extern const int8_t L1_WEIGHTS[];
-extern const int32_t L1_BIAS[];
+const int8_t L1_WEIGHTS[] = {
+    77, 35, 20, -88, -93, -89, -16, -5, -57, -56, -6, 16, 5, 96, 25, 97, 
+    -126, -106, 88, 85, -114, -68, -16, -69, -95, -67, -117, 90, -100, 23, -89, 116, 
+    18, -96, 84, -64, -73, 127, -70, 58, 125, 68, 69, 54, -3, 52, -22, -101, 
+    -51, -38, 0, -56, -85, -33, -29, 119, 47, -40, 96, 96, 24, 16, 35, -108, 
+    -83, -90, 45, -38, 94, -3, -30, 73, 
+};
+
+const int32_t L1_BIAS[] = { 0, 0, 0, 0 };
 
 #define L1_IN_CH 2
 #define L1_OUT_CH 4
 #define L1_K_H 3
 #define L1_K_W 3
 #define L1_PAD 1
-#define L1_MULT 2010195705
-#define L1_SHIFT 9
+#define L1_MULT 2143599195
+#define L1_SHIFT 8
 #define L1_OUT_ZP 0
-#define L1_OUT_SCALE 0.003848094f
-
+#define L1_OUT_SCALE 0.000325406f
+----------------------------------------
 // Layer: L2 (Shape: 2x4x3x3)
-extern const int8_t L2_WEIGHTS[];
-extern const int32_t L2_BIAS[];
+const int8_t L2_WEIGHTS[] = {
+    117, 39, -97, 35, -55, -20, 103, -96, 45, 87, 65, -125, 23, -97, 127, -100, 
+    -1, -4, 79, -68, 94, -30, -7, 61, -8, 60, 63, -120, 65, -24, 3, 91, 
+    -83, 88, 101, 19, 113, -58, -10, -126, -120, -60, 113, 59, -40, -67, 112, 124, 
+    17, 89, 73, 6, -64, 28, 6, -88, -46, 84, -25, -104, -1, -45, -57, 13, 
+    -26, 89, -74, 97, 99, 45, 91, 60, 
+};
+
+const int32_t L2_BIAS[] = { 0, 0 };
 
 #define L2_IN_CH 4
 #define L2_OUT_CH 2
 #define L2_K_H 3
 #define L2_K_W 3
 #define L2_PAD 1
-#define L2_MULT 1784145031
-#define L2_SHIFT 9
+#define L2_MULT 1259927614
+#define L2_SHIFT 7
 #define L2_OUT_ZP 0
-#define L2_OUT_SCALE 0.007632209f
-
+#define L2_OUT_SCALE 0.000091025f
+----------------------------------------
 // Layer: L3 (Shape: 1x2x1x1)
-extern const int8_t L3_WEIGHTS[];
-extern const int32_t L3_BIAS[];
+const int8_t L3_WEIGHTS[] = {
+    82, 127, 
+};
+
+const int32_t L3_BIAS[] = { -1544698 };
 
 #define L3_IN_CH 2
 #define L3_OUT_CH 1
 #define L3_K_H 1
 #define L3_K_W 1
 #define L3_PAD 0
-#define L3_MULT 1209633662
-#define L3_SHIFT 7
-#define L3_OUT_ZP 124
-#define L3_OUT_SCALE 0.008108832f
-
+#define L3_MULT 1452066555
+#define L3_SHIFT 12
+#define L3_OUT_ZP 255
+#define L3_OUT_SCALE 0.001976020f
+----------------------------------------
 #endif // WEIGHTS_H

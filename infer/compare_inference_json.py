@@ -307,6 +307,39 @@ def main():
         diff = np.abs(py_deq - c_deq)
         maxd = float(diff.max())
         stats.append((k, maxd))
+        # compute centroids for python and C dequantized outputs
+        def local_com_from_patch(mat):
+            eps = 1e-8
+            m = np.maximum(mat, 0.0)
+            mass = m.sum() + eps
+            ys = np.arange(m.shape[0])[:, None]
+            xs = np.arange(m.shape[1])[None, :]
+            xw = (m * xs).sum() / mass
+            yw = (m * ys).sum() / mass
+            return xw, yw
+
+        def global_from_patch(mat, peak_r_m, peak_c_m_10, is_odd_flag):
+            local_x, local_y = local_com_from_patch(mat)
+            pw_offset = 5 // 2
+            ph_offset = 3 // 2
+            global_x_10 = local_x + peak_c_m_10 - pw_offset
+            global_y = local_y + peak_r_m - ph_offset
+            x_clamped = min(max(global_x_10, 0.0), 9.0)
+            x_floor = int(np.floor(x_clamped))
+            x_ceil = int(np.ceil(x_clamped))
+            frac = x_clamped - float(x_floor)
+            odd_grid = np.array([0.5, 2.5, 4.5, 6.5, 8.0, 9.0, 10.5, 12.5, 14.5, 16.5], dtype=np.float32)
+            even_grid = np.array([0.0, 1.5, 3.5, 5.5, 7.5, 9.5, 11.5, 13.5, 15.5, 17.0], dtype=np.float32)
+            grid = odd_grid if int(is_odd) else even_grid
+            val_floor = float(grid[x_floor])
+            val_ceil = float(grid[x_ceil])
+            global_x_18 = val_floor + (val_ceil - val_floor) * frac
+            return global_x_18, global_y
+
+        py_cx, py_cy = global_from_patch(py_deq, peak_r_m, peak_c_m_10, is_odd)
+        c_cx, c_cy = global_from_patch(c_deq, peak_r_m, peak_c_m_10, is_odd)
+        cent_dist = float(np.hypot(py_cx - c_cx, py_cy - c_cy))
+        print(f"{i+1}/{len(keys)} {k} centroid_py=({py_cx:.3f},{py_cy:.3f}) centroid_c=({c_cx:.3f},{c_cy:.3f}) dist={cent_dist:.6f} maxdiff={maxd:.6f}")
         if (i+1) % 10 == 0:
             print(f'Processed {i+1}/{len(keys)} samples (elapsed {time()-start:.1f}s)')
     # summary
