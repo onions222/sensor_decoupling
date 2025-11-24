@@ -69,6 +69,7 @@ infer/debug_out_*.txt
 infer/debug_out_fp_*.txt
 infer/debug_out_qm_*.txt
 .png
+archive/
 
 # Project-specific intermediates/results
 infer/intermediates/*.json
