@@ -12,7 +12,7 @@ class _PatchNetFactory(nn.Module):
     def __init__(self, in_channels: int = 1, channel_list: Optional[List[int]] = None, out_channels: int = 1):
         super().__init__()
         if channel_list is None:
-            channel_list = [2, 4, 2]
+            channel_list = [4, 8, 4]
         layers = []
         prev = in_channels
         for ch in channel_list:
@@ -20,6 +20,7 @@ class _PatchNetFactory(nn.Module):
             layers.append(nn.BatchNorm2d(ch))
             layers.append(nn.ReLU(inplace=True))
             prev = ch
+        # final 1x1 conv to produce output channel
         layers.append(nn.Conv2d(prev, out_channels, kernel_size=1))
         self.net = nn.Sequential(*layers)
 
@@ -64,7 +65,7 @@ class StudentModel(nn.Module):
     def __init__(self, channel_list: Optional[List[int]] = None, in_channels: int = 1, out_channels: int = 1):
         super(StudentModel, self).__init__()
         if channel_list is None:
-            channel_list = [2, 4, 2]
+            channel_list = [4, 8, 4]
         self.odd_net = _PatchNetFactory(in_channels=in_channels, channel_list=channel_list, out_channels=out_channels)
         self.even_net = _PatchNetFactory(in_channels=in_channels, channel_list=channel_list, out_channels=out_channels)
 
@@ -92,7 +93,7 @@ def make_student_model(channels: Optional[List[int]] = None,
     - `multiplier`: scale factor applied to default channels [2,4,2].
       If both provided, `channels` takes precedence.
     """
-    base = [2, 4, 2]
+    base = [4, 8, 4]
     if channels is not None:
         ch_list = list(channels)
     elif multiplier is not None:

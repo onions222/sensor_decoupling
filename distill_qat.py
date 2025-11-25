@@ -13,14 +13,71 @@ import numpy as np
 
 import torch.ao.quantization as tq
 from models import make_student_model
+
+# 可视化依赖 (使用非交互后端，避免阻塞)
+import matplotlib
+matplotlib.use("Agg")
+import matplotlib.pyplot as plt
+
+JSON_DATA_DIR_DEFAULT = '/Users/onion/Desktop/code/sensor_decoupling/training_data/aligned_data_for_training_int'
+JSON_VIZ_DIR_DEFAULT = '/Users/onion/Desktop/code/sensor_decoupling/training_data/validation_int'
+VIZ_SAVE_ROOT = '/Users/onion/Desktop/code/sensor_decoupling/figs_val/v16_all'
+PATCH_SIZE = (3, 5)
+
+# 全局 device 占位符，实际训练设备在 __main__ 中通过 _pick_device 重新设置
+device = torch.device('cpu')
+
 import json as _json
 
-# ---------------------------------------------------------
-# [配置] 强制使用 'qnnpack' 后端 (为 MCU 准备对称量化参数)
-# ---------------------------------------------------------
-torch.backends.quantized.engine = 'qnnpack'
 
-device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+def _pick_device(preferred: str = None):
+    """
+    选择训练设备。默认优先 MPS（Apple Silicon GPU），
+    其后是 CUDA，最后 CPU。允许通过参数强制指定。
+    """
+    if preferred == 'mps' and torch.backends.mps.is_available():
+        return torch.device('mps')
+    if preferred == 'cuda' and torch.cuda.is_available():
+        return torch.device('cuda')
+    if preferred is None and torch.backends.mps.is_available():
+        return torch.device('mps')
+    if preferred is None and torch.cuda.is_available():
+        return torch.device('cuda')
+    return torch.device('cpu')
+
+
+# ---------------------------------------------------------
+# [配置] 量化后端
+# - 优先使用 qnnpack（移动端对称量化），仅在支持时设置
+# ---------------------------------------------------------
+if 'qnnpack' in torch.backends.quantized.supported_engines:
+    torch.backends.quantized.engine = 'qnnpack'
+else:
+    print("[警告] 当前 PyTorch 构建不支持 qnnpack，使用默认量化后端。")
+
+
+def _get_qconfig_backend():
+    backend = torch.backends.quantized.engine
+    if backend in (None, ''):
+        if 'qnnpack' in torch.backends.quantized.supported_engines:
+            backend = 'qnnpack'
+        elif 'fbgemm' in torch.backends.quantized.supported_engines:
+            backend = 'fbgemm'
+        else:
+            raise RuntimeError("未找到可用的量化后端。")
+    return backend
+
+
+def _maybe_enable_mps_fallback(dev: torch.device):
+    """
+    启用 MPS fallback，避免 _fused_moving_avg_obs_fq_helper 等算子缺失时报错。
+    在 Apple 芯片上做 QAT 时建议开启。
+    """
+    if dev.type == 'mps' and os.environ.get('PYTORCH_ENABLE_MPS_FALLBACK') != '1':
+        os.environ['PYTORCH_ENABLE_MPS_FALLBACK'] = '1'
+        print("[提示] 已设置 PYTORCH_ENABLE_MPS_FALLBACK=1，缺失算子将回退到 CPU（速度略慢）。")
+
+
 
 
 # -----------------------------
@@ -57,7 +114,7 @@ class _PatchNet_V14_Student(nn.Module):
         self.net = nn.Sequential(
             nn.Conv2d(in_channels, 4, 3, padding=1, bias=False), nn.BatchNorm2d(4), nn.ReLU(inplace=True),
             nn.Conv2d(4, 8, 3, padding=1, bias=False), nn.BatchNorm2d(8), nn.ReLU(inplace=True),
-            nn.Conv2d(8, 4, 1, bias=False), nn.BatchNorm2d(4), nn.ReLU(inplace=True),
+            nn.Conv2d(8, 4, 3, padding=1, bias=False), nn.BatchNorm2d(4), nn.ReLU(inplace=True),
             nn.Conv2d(4, out_channels, 1)
         )
     def forward(self, x): return self.net(x)
@@ -227,6 +284,7 @@ def fuse_student_modules(model: StudentModel):
         fuse_list = [['net.0','net.1','net.2'], ['net.3','net.4','net.5'], ['net.6','net.7','net.8']]
         torch.quantization.fuse_modules(module, fuse_list, inplace=True)
 
+'''
 def export_onnx(model_original, args):
     """
     导出带有 FakeQuantize 节点的 ONNX 模型 (QDQ 格式)。
@@ -310,7 +368,7 @@ def export_onnx(model_original, args):
             mult = float(args.student_mult) if args.student_mult is not None else None
             model_export = make_student_model(multiplier=mult)
         fuse_student_modules(model_export)
-        model_export.qconfig = tq.get_default_qat_qconfig('qnnpack')
+        model_export.qconfig = tq.get_default_qat_qconfig(_get_qconfig_backend())
         tq.prepare_qat(model_export, inplace=True)
         model_export.load_state_dict(model_original.state_dict())
     
@@ -318,7 +376,7 @@ def export_onnx(model_original, args):
     model_original.to(device)
 
     # ---------------------------------------------------------
-    # 2. 执行“手术”：物理替换所有 FakeQuantize
+    # 2. 执行"手术"：物理替换所有 FakeQuantize
     # ---------------------------------------------------------
     model_export.to('cpu')
     model_export.eval()
@@ -367,6 +425,7 @@ def export_onnx(model_original, args):
         return False
     finally:
         del model_export
+'''
 
 def train_qat(args):
     # 再次设置引擎
@@ -396,20 +455,32 @@ def train_qat(args):
 
     if args.student_channels:
         chs = [int(x) for x in args.student_channels.split(',') if x.strip()]
-        student = make_student_model(channels=chs).to(device)
+        student = make_student_model(channels=chs)
     else:
-        mult = float(args.student_mult) if args.student_mult is not None else None
-        student = make_student_model(multiplier=mult).to(device)
+        mult = args.student_mult
+        student = make_student_model(multiplier=mult)
     
     if args.init_student and os.path.isfile(args.init_student):
-        student.load_state_dict(torch.load(args.init_student, map_location=device))
+        # 在 CPU 上加载初始权重，避免与后续设备迁移冲突
+        student.load_state_dict(torch.load(args.init_student, map_location='cpu'))
         print(f"初始化学生模型: {args.init_student}")
 
-    # Fuse
-    fuse_student_modules(student)
+    # 打印学生模型结构
+    print("=" * 50)
+    print("学生模型结构:")
+    print("=" * 50)
+    print(student)
+    print("=" * 50)
+    print("奇数行网络结构 (odd_net):")
+    print(student.odd_net)
+    print("=" * 50)
+    print("偶数行网络结构 (even_net):")
+    print(student.even_net)
+    print("=" * 50)
 
-    # Prepare QAT (QNNPACK config)
-    student.qconfig = tq.get_default_qat_qconfig('qnnpack')
+    # 先在 CPU 上 fuse，再准备 QAT，最后移动到目标 device
+    fuse_student_modules(student)
+    student.qconfig = tq.get_default_qat_qconfig(_get_qconfig_backend())
     tq.prepare_qat(student, inplace=True)
     student.to(device)
 
@@ -425,7 +496,7 @@ def train_qat(args):
 
     for epoch in range(args.epochs):
         student.train()
-        total_loss = total_coords = total_distill = 0.0
+        total_loss = total_distill = 0.0
         for batch in tqdm(train_loader, desc=f"Train E{epoch+1}"):
             raw_patch, clean_patch, is_odd, peak_r_gt, peak_c_gt_18, peak_r_m, peak_c_m_10 = batch
             raw_patch = raw_patch.to(device); clean_patch = clean_patch.to(device); is_odd = is_odd.to(device)
@@ -469,13 +540,13 @@ def train_qat(args):
         val_loss = val_loss / max(1, len(val_loader))
         print(f"Epoch {epoch+1}/{args.epochs}  TrainLoss: {total_loss/len(train_loader):.6f}  ValDistill: {val_loss:.6f}")
 
-        float_path = os.path.join(args.out_dir, 'best_qat_float.pt')
-        torch.save(student.state_dict(), float_path)
-
         if val_loss < best_val:
             best_val = val_loss
+            float_path = os.path.join(args.out_dir, 'best_qat_float.pt')
+            torch.save(student.state_dict(), float_path)
+
             # 使用新定义的 Robust 导出函数
-            export_success = export_onnx(student, args)
+            # export_success = export_onnx(student, args)
 
             try:
                 student.cpu()
@@ -488,14 +559,160 @@ def train_qat(args):
             finally:
                 student.to(device)
 
-    print("QAT 训练完成。请使用 student_qat.onnx 进行后续部署。")
+    print("QAT 训练完成。")
+
+# -----------------------------
+# 可视化工具 (复用 teacher_train.py 思路)
+# -----------------------------
+def _compress_merging_to_10_col(matrix_18_col: np.ndarray):
+    odd_pairs = [(0,1),(2,3),(4,5),(6,7),(10,11),(12,13),(14,15),(16,17)]
+    odd_single = [(8,4), (9,5)]
+    odd_map = {0:0, 1:0, 2:1, 3:1, 4:2, 5:2, 6:3, 7:3, 8:4, 9:5, 10:6, 11:6, 12:7, 13:7, 14:8, 15:8, 16:9, 17:9}
+    even_pairs = [(1,2),(3,4),(5,6),(7,8),(9,10),(11,12),(13,14),(15,16)]
+    even_single = [(0,0), (17,9)]
+    even_map = {0:0, 1:1, 2:1, 3:2, 4:2, 5:3, 6:3, 7:4, 8:4, 9:5, 10:5, 11:6, 12:6, 13:7, 14:7, 15:8, 16:8, 17:9}
+    matrix_10_col = np.zeros((32, 10), dtype=np.float32)
+    for row_idx in range(32):
+        is_odd = (row_idx % 2 == 1)
+        pairs = odd_pairs if is_odd else even_pairs
+        singles = odd_single if is_odd else even_single
+        mapping = odd_map if is_odd else even_map
+        for col_left, col_right in pairs:
+            col_10 = mapping[col_left]
+            avg_val = (matrix_18_col[row_idx, col_left] + matrix_18_col[row_idx, col_right]) / 2.0
+            matrix_10_col[row_idx, col_10] = avg_val
+        for col_18, col_10 in singles:
+            matrix_10_col[row_idx, col_10] = matrix_18_col[row_idx, col_18]
+    return matrix_10_col
+
+
+def _load_viz_samples_from_file(json_path: str, patch_size, device: torch.device):
+    raw_patch_list, clean_patch_list, is_odd_list = [], [], []
+    peak_coords_18_gt_list, peak_coords_10_merging_list = [], []
+
+    patch_h, patch_w = patch_size
+    pad2d_18_col = (patch_w // 2, patch_w // 2, patch_h // 2, patch_h // 2)
+    pad2d_10_col = pad2d_18_col
+    eps = 1e-8
+
+    try:
+        with open(json_path, "r", encoding="utf-8") as file:
+            aligned_data = json.load(file)
+        for pair_data in aligned_data.values():
+            merging_18 = np.array(pair_data["merging"]["normalized_matrix"], dtype=np.float32)
+            target_18 = np.array(pair_data["nonmerging"]["normalized_matrix"], dtype=np.float32)
+            if merging_18.shape != (32, 18):
+                continue
+
+            peak_r_gt, peak_c_gt_18 = np.unravel_index(np.argmax(target_18), (32, 18))
+            target_t_18 = F.pad(torch.from_numpy(target_18), pad2d_18_col)
+            clean_patch = target_t_18[peak_r_gt:peak_r_gt + patch_h, peak_c_gt_18:peak_c_gt_18 + patch_w]
+
+            effective_merging_10 = _compress_merging_to_10_col(merging_18)
+            peak_r_m, peak_c_m_10 = np.unravel_index(np.argmax(effective_merging_10), (32, 10))
+            merging_t_10 = F.pad(torch.from_numpy(effective_merging_10), pad2d_10_col)
+            merging_patch = merging_t_10[peak_r_m:peak_r_m + patch_h, peak_c_m_10:peak_c_m_10 + patch_w]
+
+            merging_patch = merging_patch.clamp_min(0)
+            merging_patch = merging_patch / (merging_patch.sum() + eps)
+            clean_patch = clean_patch.clamp_min(0)
+            clean_patch = clean_patch / (clean_patch.sum() + eps)
+
+            raw_patch_list.append(merging_patch)
+            clean_patch_list.append(clean_patch)
+            is_odd_list.append(float(peak_r_m % 2 == 1))
+            peak_coords_18_gt_list.append([peak_r_gt, peak_c_gt_18])
+            peak_coords_10_merging_list.append([peak_r_m, peak_c_m_10])
+    except Exception as exc:
+        print(f"[可视化] 加载 {json_path} 失败: {exc}")
+        return [None] * 5
+
+    if len(raw_patch_list) == 0:
+        return [None] * 5
+
+    print(f"[可视化] 文件 {os.path.basename(json_path)} 加载 {len(raw_patch_list)} 个样本。")
+    raw_tensor = torch.stack(raw_patch_list).unsqueeze(1).to(device)
+    clean_tensor = torch.stack(clean_patch_list).unsqueeze(1).to(device)
+    is_odd_tensor = torch.tensor(is_odd_list, dtype=torch.float32).to(device)
+    peak_18_gt_tensor = torch.tensor(peak_coords_18_gt_list, dtype=torch.float32).to(device)
+    peak_10_merging_tensor = torch.tensor(peak_coords_10_merging_list, dtype=torch.float32).to(device)
+    return raw_tensor, clean_tensor, is_odd_tensor, peak_18_gt_tensor, peak_10_merging_tensor
+
+
+def visualize_qat_predictions(model_path: str, viz_dir: str, device: torch.device):
+    """加载 Student 模型，对指定目录下每个 json 单独可视化并保存 png。"""
+    print("\n--- 开始可视化 (QAT Student) ---")
+    print(f"加载模型: {model_path}")
+    # 按训练/QAT 时的骨架构建模型 (fuse + prepare_qat)，以便加载包含 fake_quant 的权重
+    model = StudentModel().to(device)
+    fuse_student_modules(model)
+    backend = _get_qconfig_backend()
+    model.qconfig = tq.get_default_qat_qconfig(backend)
+    tq.prepare_qat(model, inplace=True)
+    com_pred = CoM_from_Patch_V12(*PATCH_SIZE).to(device)
+    com_gt = CoM_from_18col_Patch_V15(*PATCH_SIZE).to(device)
+
+    try:
+        model.load_state_dict(torch.load(model_path, map_location=device), strict=False)
+        model.eval()
+        print("[可视化] 模型加载完成。")
+    except Exception as exc:
+        print(f"[可视化] 模型加载失败: {exc}")
+        return
+
+    os.makedirs(VIZ_SAVE_ROOT, exist_ok=True)
+    json_files = [f for f in sorted(os.listdir(viz_dir)) if f.lower().endswith('.json')]
+    if not json_files:
+        print(f"[可视化] {viz_dir} 无 json 文件。")
+        return
+
+    for filename in json_files:
+        json_path = os.path.join(viz_dir, filename)
+        raw_data, clean_data, is_odd_data, peak_18_gt_data, peak_10_merging_data = _load_viz_samples_from_file(
+            json_path, PATCH_SIZE, device
+        )
+        if raw_data is None:
+            continue
+
+        with torch.no_grad():
+            clean_global_coords = com_gt(clean_data, peak_18_gt_data[:, 0], peak_18_gt_data[:, 1])
+            raw_global_coords = com_pred(raw_data, is_odd_data, peak_10_merging_data[:, 0], peak_10_merging_data[:, 1])
+            pred_patches = model(raw_data, is_odd_data)
+            pred_global_coords = com_pred(pred_patches, is_odd_data, peak_10_merging_data[:, 0], peak_10_merging_data[:, 1])
+
+        def transform_coords(coords_np):
+            x_vals = coords_np[:, 0] * 64.0 + 32.0
+            y_vals = coords_np[:, 1] * 64.0 + 32.0
+            return x_vals, y_vals
+
+        raw_x, raw_y = transform_coords(raw_global_coords.cpu().numpy())
+        clean_x, clean_y = transform_coords(clean_global_coords.cpu().numpy())
+        pred_x, pred_y = transform_coords(pred_global_coords.cpu().numpy())
+
+        plt.figure(figsize=(12, 12))
+        plt.scatter(clean_x, clean_y, marker="*", s=120, c="lime", edgecolors="black", label="真值 (Clean)", zorder=5)
+        plt.scatter(raw_x, raw_y, marker="x", s=70, c="red", label="解耦前 (Raw)", zorder=4)
+        plt.scatter(pred_x, pred_y, marker="o", s=70, c="blue", alpha=0.7, label="解耦后 (Student)", zorder=3)
+        for idx in range(len(clean_x)):
+            plt.plot([raw_x[idx], clean_x[idx]], [raw_y[idx], clean_y[idx]], "r--", linewidth=0.5, alpha=0.5)
+            plt.plot([pred_x[idx], clean_x[idx]], [pred_y[idx], clean_y[idx]], "b--", linewidth=0.5, alpha=0.5)
+        plt.title(f"QAT Student 全局坐标校正 ({filename}, {len(raw_x)} 样本)")
+        plt.xlabel("X 坐标 (x*64+32)")
+        plt.ylabel("Y 坐标 (y*64+32)")
+        plt.legend()
+        plt.grid(True, linestyle=":", alpha=0.6)
+        plt.axis("equal")
+        save_path = os.path.join(VIZ_SAVE_ROOT, f"{os.path.splitext(filename)[0]}.png")
+        plt.savefig(save_path, bbox_inches="tight")
+        plt.close()
+        print(f"[可视化] 已保存 {save_path}")
 
 def parse_args():
     p = argparse.ArgumentParser()
     p.add_argument('--data-dir', default=JSON_DATA_DIR_DEFAULT)
-    p.add_argument('--teacher-path', default='/work/hwc/SPARSE/distill/decoupler_model_v16_teacher_best.pth')
-    p.add_argument('--init-student', default='/work/hwc/SPARSE/distill/pths/decoupler_model_v16_student_best.pth')
-    p.add_argument('--out-dir', default='/work/hwc/SPARSE/distill/qat_student_runs')
+    p.add_argument('--teacher-path', default='/Users/onion/Desktop/code/sensor_decoupling/distill/decoupler_model_v16_teacher_best.pth')
+    p.add_argument('--init-student', default='/Users/onion/Desktop/code/sensor_decoupling/distill/decoupler_model_v16_student_best.pth')
+    p.add_argument('--out-dir', default='/Users/onion/Desktop/code/sensor_decoupling/distill/qat_student_runs')
     p.add_argument('--epochs', type=int, default=60)
     p.add_argument('--batch-size', type=int, default=64)
     p.add_argument('--lr', type=float, default=1e-3)
@@ -503,11 +720,24 @@ def parse_args():
     p.add_argument('--student-mult', type=float, default=None)
     p.add_argument('--distill-coord', action='store_true')
     p.add_argument('--alpha', type=float, default=0.3)
+    p.add_argument('--device', type=str, choices=['mps', 'cuda', 'cpu'], default='cpu',
+                   help="优先使用的训练设备；默认自动选择（Apple m4 推荐 mps）。")
+    p.add_argument('--visualize', action='store_true', help='仅可视化，不进行训练。')
+    p.add_argument('--viz-model', type=str, default='/Users/onion/Desktop/code/sensor_decoupling/distill/qat_student_runs/best_qat_float.pt',
+                   help='用于可视化的学生模型路径。')
+    p.add_argument('--viz-dir', type=str, default=JSON_VIZ_DIR_DEFAULT,
+                   help='可视化数据目录，默认 validation_int。')
     return p.parse_args()
 
 if __name__ == '__main__':
-    JSON_DATA_DIR_DEFAULT = '/work/hwc/SPARSE/training_data/aligned_data_for_training_int'
-    PATCH_SIZE = (3, 5)
     args = parse_args()
-    print(f"Device: {device}. Using quant backend qnnpack.\nData dir: {args.data_dir}")
-    train_qat(args)
+    device = _pick_device(args.device)
+    _maybe_enable_mps_fallback(device)
+    print(f"Device: {device}. Quant backend: {_get_qconfig_backend()}.\nData dir: {args.data_dir}")
+    if args.visualize:
+        viz_model_path = args.viz_model if os.path.isfile(args.viz_model) else os.path.join(args.out_dir, 'best_qat_float.pt')
+        visualize_qat_predictions(viz_model_path, args.viz_dir, device)
+    else:
+        train_qat(args)
+        viz_model_path = args.viz_model if os.path.isfile(args.viz_model) else os.path.join(args.out_dir, 'best_qat_float.pt')
+        visualize_qat_predictions(viz_model_path, args.viz_dir, device)

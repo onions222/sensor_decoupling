@@ -27,7 +27,7 @@ import torch.ao.quantization as tq
 from models import make_student_model
 import json as _json
 
-device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+device = torch.device('cuda' if torch.cuda.is_available() else 'mps' if torch.backends.mps.is_available() else 'cpu')
 
 
 # -----------------------------

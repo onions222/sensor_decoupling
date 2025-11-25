@@ -27,7 +27,7 @@ import matplotlib.pyplot as plt
 # except Exception as e:
 #     print(f"Google Drive 挂载失败: {e}")
 
-device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+device = torch.device('cuda' if torch.cuda.is_available() else 'mps' if torch.backends.mps.is_available() else 'cpu')
 print(f'Using device: {device}')
 
 

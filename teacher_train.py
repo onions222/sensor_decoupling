@@ -33,8 +33,8 @@ EVEN_MAP_18_TO_10 = {0: 0, 1: 1, 2: 1, 3: 2, 4: 2, 5: 3, 6: 3, 7: 4, 8: 4, 9: 5,
 class TrainingConfig:
     """Centralized configuration used by ``main``."""
 
-    json_data_dir: str = "/work/hwc/SPARSE/training_data/aligned_data_for_training_int"
-    viz_json_path: str = "/work/hwc/SPARSE/training_data/validation_int/aligned_g26.json"
+    json_data_dir: str = "/Users/onion/Desktop/code/sensor_decoupling/training_data/aligned_data_for_training_int"
+    viz_json_path: str = "/Users/onion/Desktop/code/sensor_decoupling/training_data/aligned_data_for_training_int/aligned_g26.json"
     patch_size: Tuple[int, int] = (3, 5)
     batch_size: int = 64
     train_ratio: float = 0.8
@@ -44,8 +44,8 @@ class TrainingConfig:
     alpha: float = 0.3  # hard vs soft target mixing weight
     train_teacher: bool = True
     enable_visualization: bool = True
-    teacher_model_path: str = "/work/hwc/SPARSE/distill/decoupler_model_v16_teacher_best.pth"
-    student_model_path: str = "/work/hwc/SPARSE/distill/pths/decoupler_model_v16_student_best.pth"
+    teacher_model_path: str = "/Users/onion/Desktop/code/sensor_decoupling/distill/decoupler_model_v16_teacher_best.pth"
+    student_model_path: str = "/Users/onion/Desktop/code/sensor_decoupling/distill/pths/decoupler_model_v16_student_best.pth"
     random_seed: int = 42
 
 
@@ -626,29 +626,38 @@ def visualize_model_predictions(
     pred_x_viz, pred_y_viz = transform_coords(pred_coords_np)
 
     print("开始绘图...")
+    # 创建保存目录
+    save_dir = '/Users/onion/Desktop/code/sensor_decoupling/figs_val/v16_all'
+    os.makedirs(save_dir, exist_ok=True)
+    
+    # 为整个JSON文件生成一张图像，包含所有样本
     plt.figure(figsize=(12, 12))
+    
+    # 绘制所有样本的数据点
     plt.scatter(clean_x_viz, clean_y_viz, marker="*", s=150, c="lime", edgecolors="black", label="真值 (Clean)", zorder=5)
     plt.scatter(raw_x_viz, raw_y_viz, marker="x", s=80, c="red", label="解耦前 (Raw)", zorder=4)
-    plt.scatter(
-        pred_x_viz,
-        pred_y_viz,
-        marker="o",
-        s=80,
-        c="blue",
-        alpha=0.7,
-        label=f"解耦后 ({model_type})",
-        zorder=3,
-    )
+    plt.scatter(pred_x_viz, pred_y_viz, marker="o", s=80, c="blue", alpha=0.7, label=f"解耦后 ({model_type})", zorder=3)
+    
+    # 为每个样本绘制连接线
     for idx in range(len(clean_x_viz)):
         plt.plot([raw_x_viz[idx], clean_x_viz[idx]], [raw_y_viz[idx], clean_y_viz[idx]], "r--", linewidth=0.5, alpha=0.5)
         plt.plot([pred_x_viz[idx], clean_x_viz[idx]], [pred_y_viz[idx], clean_y_viz[idx]], "b--", linewidth=0.5, alpha=0.5)
+    
     plt.title(f"V16 ({model_type}) 全局坐标校正 (来自 {os.path.basename(config.viz_json_path)})")
     plt.xlabel("X 坐标 (全局 18-col 物理坐标, 已变换: x*64+32)")
     plt.ylabel("Y 坐标 (全局 32-row 物理坐标, 已变换: y*64+32)")
     plt.legend()
     plt.grid(True, linestyle=":", alpha=0.6)
     plt.axis("equal")
-    plt.show()
+    
+    # 保存图像，使用JSON文件名作为图像文件名
+    json_filename = os.path.splitext(os.path.basename(config.viz_json_path))[0]
+    save_path = os.path.join(save_dir, f"{json_filename}.png")
+    plt.savefig(save_path, dpi=300, bbox_inches='tight')
+    plt.close()
+    print(f"已保存 {len(clean_x_viz)} 个样本的可视化结果到 {save_path}")
+    
+    print(f"JSON文件 {config.viz_json_path} 的可视化结果已保存到 {save_path}")
 
 
 def main():
