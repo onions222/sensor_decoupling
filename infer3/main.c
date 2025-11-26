@@ -1,8 +1,10 @@
 #include <stdio.h>
 #include <math.h>
+#include <stdint.h>
 
 #include "teacher_int8_infer.h"
 #include "debug_data.h"
+#include "frames_data.h"  // 由 Python 脚本导出的多帧 32x18 merging 数据
 
 // 与 DifferentiableCoM_Patch_3x5 一致：返回 (center_x, center_y)
 // center_x: 列方向 [0, DEBUG_PATCH_W-1]
@@ -76,7 +78,8 @@ static void local_to_global_18(
     *out_y   = global_y;
 }
 
-int main(void) {
+static void run_debug_from_patches(void)
+{
     int mismatch_cnt = 0;
 
     printf("Global coordinate comparison on %d samples:\n", DEBUG_NUM_SAMPLES);
@@ -128,6 +131,26 @@ int main(void) {
 
     printf("\nSummary: %d / %d samples have global coord mismatch > 1e-4.\n",
            mismatch_cnt, DEBUG_NUM_SAMPLES);
+}
+
+int main(void) {
+    // 示例：批量多帧推理，从 frames_data.h 导入的 32x18 merging 帧逐帧计算坐标
+
+    printf("[BATCH] Total frames = %d\n", FRAMES_NUM);
+
+    for (int i = 0; i < FRAMES_NUM; ++i) {
+        // const float (*frame_18)[FRAME_W_18] = frames_merging_18[i];
+        const int16_t (*frame_18)[FRAME_W_18] = frames_merging_18[i];
+
+        float gx18 = 0.0f;
+        float gy   = 0.0f;
+        teacher_full_pipeline(frame_18, &gx18, &gy);
+
+        printf("[FRAME %4d] x18 = %.6f, y = %.6f\n", i, gx18, gy);
+    }
+
+    // 如果需要做 C vs Python 的 patch 级对齐验证，临时打开：
+    // run_debug_from_patches();
 
     return 0;
 }
