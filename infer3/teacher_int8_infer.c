@@ -382,7 +382,8 @@ static void compress_merging_to_10_col(
     }
 
     for (int r = 0; r < FRAME_H; ++r) {
-        int is_odd = (r % 2 == 1);
+        // 已修正，原来是 int is_odd = (r % 2 == 1)
+        int is_odd = (r % 2 == 0);
 
         if (is_odd) {
             // odd 行：先处理成对的列
@@ -449,7 +450,8 @@ static void find_peak_m_10(
 
     *peak_r_m    = best_r;
     *peak_c_m_10 = best_c;
-    *is_odd      = (best_r % 2 == 1);
+    // 原来是：*is_odd      = (best_r % 2 == 1)
+    *is_odd      = (best_r % 2 == 0);
 }
 
 // 截取与 PyTorch 中 pad + slice 等价的 3x5 patch
