@@ -38,6 +38,26 @@ static inline int8_t quantize_symmetric(float x, float scale) {
 //   输出: y_real[OC * H_out * W_out]
 // 计算: acc = sum( x_q * (w_int8 - w_zp) )，然后
 //       y = acc * (x_scale * w_scale) + bias，最后 ReLU
+// 对称量化: x_real / scale -> int8, 截断到 [-128, 127]
+// 使用乘法代替除法，减少开销
+static inline int8_t quantize_symmetric_fast(float x, float inv_scale) {
+    if (inv_scale <= 0.0f) {
+        return 0;
+    }
+    float q = x * inv_scale;      // q = x / scale
+    if (q > 127.0f) q = 127.0f;
+    if (q < -128.0f) q = -128.0f;
+
+    // 用 roundf 也可以，这里保持和之前 lrintf 一致
+    int32_t qi = (int32_t)lrintf(q);
+    if (qi > 127) qi = 127;
+    if (qi < -128) qi = -128;
+    return (int8_t)qi;
+}
+
+// 通用 int8 部署卷积（优化版）:
+// 1) 先把整张输入 feature map 量化到 int8 buffer
+// 2) 再用整数卷积 + 单次浮点缩放
 static void conv2d_int8_deploy(
     const float* x_real,
     int in_c,
@@ -59,12 +79,25 @@ static void conv2d_int8_deploy(
     int out_h = (in_h + 2 * pad - kernel_h) / stride + 1;
     int out_w = (in_w + 2 * pad - kernel_w) / stride + 1;
 
+    // 预量化输入: x_real -> x_q_buf
+    int total_elems = in_c * in_h * in_w;
+    float inv_x_scale = (x_scale > 0.0f) ? (1.0f / x_scale) : 0.0f;
+
+    // C99 VLA，在你这个网络下尺寸非常小（如 16*3*5=240）
+    int8_t x_q_buf[total_elems];
+    for (int i = 0; i < total_elems; ++i) {
+        x_q_buf[i] = quantize_symmetric_fast(x_real[i], inv_x_scale);
+    }
+
+    // 把 x_scale * w_scale 提前算好
+    float eff_scale = x_scale * w_scale;
+
     // 遍历输出通道 & 空间位置
     for (int oc = 0; oc < out_c; ++oc) {
         for (int oh = 0; oh < out_h; ++oh) {
             for (int ow = 0; ow < out_w; ++ow) {
 
-                int64_t acc = 0;  // 累加用 64bit，防止溢出
+                int32_t acc = 0;  // 32 bit 累加已足够
 
                 for (int ic = 0; ic < in_c; ++ic) {
                     for (int kh = 0; kh < kernel_h; ++kh) {
@@ -77,10 +110,9 @@ static void conv2d_int8_deploy(
                                 continue;  // 超出边界视为 0
                             }
 
-                            // 取输入 x_real(ic, ih, iw)
+                            // 取量化后的输入 x_q(ic, ih, iw)
                             int x_idx = (ic * in_h + ih) * in_w + iw;
-                            float x_val = x_real[x_idx];
-                            int8_t x_q = quantize_symmetric(x_val, x_scale);
+                            int8_t x_q = x_q_buf[x_idx];
 
                             // 取权重 w_int8(oc, ic, kh, kw)
                             int w_idx =
@@ -88,14 +120,12 @@ static void conv2d_int8_deploy(
                             int8_t w_q = w_int8[w_idx];
 
                             int32_t w_center = (int32_t)w_q - (int32_t)w_zp;
-                            int32_t prod = (int32_t)x_q * w_center;
-
-                            acc += (int64_t)prod;
+                            acc += (int32_t)x_q * w_center;
                         }
                     }
                 }
 
-                float y = (float)acc * (x_scale * w_scale);
+                float y = (float)acc * eff_scale;
                 if (bias != NULL) {
                     y += bias[oc];
                 }
