@@ -40,20 +40,6 @@ static inline int8_t quantize_symmetric(float x, float scale) {
 //       y = acc * (x_scale * w_scale) + bias，最后 ReLU
 // 对称量化: x_real / scale -> int8, 截断到 [-128, 127]
 // 使用乘法代替除法，减少开销
-static inline int8_t quantize_symmetric_fast(float x, float inv_scale) {
-    if (inv_scale <= 0.0f) {
-        return 0;
-    }
-    float q = x * inv_scale;      // q = x / scale
-    if (q > 127.0f) q = 127.0f;
-    if (q < -128.0f) q = -128.0f;
-
-    // 用 roundf 也可以，这里保持和之前 lrintf 一致
-    int32_t qi = (int32_t)lrintf(q);
-    if (qi > 127) qi = 127;
-    if (qi < -128) qi = -128;
-    return (int8_t)qi;
-}
 
 // 通用 int8 部署卷积（优化版）:
 // 1) 先把整张输入 feature map 量化到 int8 buffer
